@@ -922,6 +922,13 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "没有可上传的报告（无URCODE）")
             return
 
+        # 签名后立即刷新UI：所有报告立刻切到"上传中"
+        for rep in current.reports:
+            rep.status = "uploading"
+            rep.progress = 0
+        self._render_cards()
+        QApplication.processEvents()
+
         # 每报告独立 worker，互相并行
         mrn = current.mrn
         worker = UploadWorker(current, user_id_input)
@@ -931,7 +938,11 @@ class MainWindow(QMainWindow):
         self._upload_workers[mrn] = worker
         worker.start()
         self._update_patient_list_items()
-        self._render_cards()
+
+        # 进度条脉冲动画
+        self._pulse_timer = QTimer(self)
+        self._pulse_timer.timeout.connect(self._animate_progress_pulse)
+        self._pulse_timer.start(400)
 
     def _on_ord_fetch_progress(self, mrn, device, ord_no, status_msg):
         """ord_fetch 实时更新卡片上的医嘱号显示"""
@@ -955,8 +966,12 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "没有可上传的报告（无URCODE）")
             return
 
-        # 显示进度遮罩
-        self._show_upload_overlay()
+        # 签名后立即刷新UI：所有报告立刻切到"上传中"，无需等待worker信号
+        for rep in current.reports:
+            rep.status = "uploading"
+            rep.progress = 0
+        self._render_cards()
+        QApplication.processEvents()
 
         # 每报告独立 worker，互相并行
         mrn = current.mrn
@@ -967,7 +982,34 @@ class MainWindow(QMainWindow):
         self._upload_workers[mrn] = worker
         worker.start()
         self._update_patient_list_items()
-        self._render_cards()
+
+        # 进度条脉冲动画，让卡片有动态感
+        self._pulse_timer = QTimer(self)
+        self._pulse_timer.timeout.connect(self._animate_progress_pulse)
+        self._pulse_timer.start(400)
+
+    def _animate_progress_pulse(self):
+        """进度条样式脉冲：正在上传的报告进度条在蓝/橙之间切换，提示动态进行中"""
+        if not hasattr(self, 'cards_wrap'):
+            return
+        if not hasattr(self, '_pulse_state'):
+            self._pulse_state = False
+        self._pulse_state = not self._pulse_state
+        # 直接修改当前卡片页已有控件的样式，不重建
+        cards = self.cards_wrap.findChildren(QWidget)
+        # 进度条 chunk 颜色：蓝(活跃) / 橙(脉冲)
+        color = "#FF9500" if self._pulse_state else "#0066CC"
+        for card in cards:
+            for child in card.findChildren(QProgressBar):
+                child.setStyleSheet(
+                    f"QProgressBar {{ border: none; background: #F0F0F0; border-radius: 1px; }} "
+                    f"QProgressBar::chunk {{ background: {color}; border-radius: 1px; }}")
+            for child in card.findChildren(QLabel):
+                if child.text() == "上传中...":
+                    # 文字脉冲：正常 / 加粗
+                    child.setStyleSheet(
+                        "font-size: 10px; color: #FF9500; "
+                        + ("font-weight: 700; padding: 0px;" if self._pulse_state else "font-weight: 600; padding: 0px;"))
 
     def _show_upload_overlay(self):
         """签名后立即显示半透明进度遮罩"""
@@ -1021,7 +1063,9 @@ class MainWindow(QMainWindow):
         self._update_patient_list_items()
 
     def _on_upload_finished(self, mrn, user_id):
-        self._hide_upload_overlay()
+        if hasattr(self, '_pulse_timer') and self._pulse_timer:
+            self._pulse_timer.stop()
+            self._pulse_timer = None
         if mrn in self._upload_workers:
             del self._upload_workers[mrn]
 
@@ -1075,7 +1119,7 @@ class MainWindow(QMainWindow):
         for worker in list(self._upload_workers.values()):
             worker.cancel()
             worker.quit()
-        if self._active_driver:
+        if hasattr(self, '_active_driver') and self._active_driver:
             try:
                 self._active_driver.quit()
             except Exception:
