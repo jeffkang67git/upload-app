@@ -60,7 +60,19 @@ def _make_chrome_driver():
 
 def _get_user_id(driver, user_id, loc, arcim):
     driver.get(CSP_PAGE_TPL.format(urcode="SZU06"))
-    time.sleep(5)
+    # 等 tkMakeServerCall 就绪，不盲等5秒
+    import time as _t
+    for _ in range(15):
+        try:
+            ready = driver.execute_script(
+                "try { return typeof tkMakeServerCall === 'function'; } catch(e) { return false; }")
+            if ready:
+                break
+        except Exception:
+            pass
+        _t.sleep(1)
+    else:
+        raise RuntimeError("页面加载超时")
     script = f"""
     try {{
         var r = tkMakeServerCall('web.DHCPE.Interface.Main','GetUserID','{user_id}','{loc}','{arcim}');
@@ -879,7 +891,8 @@ class MainWindow(QMainWindow):
 
     def _on_preview(self, rep):
         subprocess.run(["open", str(rep.pdf_path)])
-        rep.status = 'previewed'
+        if rep.status != 'done':
+            rep.status = 'previewed'
         self._render_cards()
 
     # ---- settings ----
@@ -1362,11 +1375,12 @@ class SingleReportWorker(QThread):
     report_done = pyqtSignal(str, object, object, str)  # (mrn, rep, success_or_None, err)
     finished = pyqtSignal(str, object)  # (mrn, rep)
 
-    def __init__(self, patient, rep, user_id, parent=None):
+    def __init__(self, patient, rep, user_id, user_orditem_id=None, parent=None):
         super().__init__(parent)
         self.patient = patient
         self.rep = rep
         self.user_id = user_id
+        self.user_orditem_id = user_orditem_id  # 预取则跳过GetUserID
         self.driver = None
         self._cancelled = False
 
@@ -1389,11 +1403,15 @@ class SingleReportWorker(QThread):
             self.finished.emit(mrn, rep)
             return
 
-        # GetUserID（每报告签一次，但可并行）
+        # GetUserID（有预取结果则跳过，否则实时获取）
         try:
-            arcim = str(rep.arcim or "").split('^')[0]
-            user_orditem_id = _get_user_id(self.driver, self.user_id, "343", arcim)
-            log_append(mrn, rep.device_name, self.user_id, "user_verified", user_orditem_id)
+            if self.user_orditem_id:
+                user_orditem_id = self.user_orditem_id
+                log_append(mrn, rep.device_name, self.user_id, "user_verified", user_orditem_id)
+            else:
+                arcim = str(rep.arcim or "").split('^')[0]
+                user_orditem_id = _get_user_id(self.driver, self.user_id, "343", arcim)
+                log_append(mrn, rep.device_name, self.user_id, "user_verified", user_orditem_id)
         except Exception as e:
             log_append(mrn, rep.device_name, self.user_id, "user_fail", str(e))
             rep.status = "fail"
@@ -1536,9 +1554,22 @@ class UploadWorker(QThread):
         if not reports:
             return
 
+        # 预取 GetUserID（一次，全报告共用）
+        prefetch_user_id = None
+        try:
+            driver = _make_chrome_driver()
+            driver.set_page_load_timeout(15)
+            # 统一用 SZU06 取 user_id
+            prefetch_user_id = _get_user_id(driver, self.user_id, "343", "8249||1")
+            driver.quit()
+        except Exception as e:
+            log_append(self.patient.mrn, "预取GetUserID", self.user_id, "user_fail", str(e))
+
+        # 并行启动所有报告 worker
         for rep in reports:
             rep.status = "pending"
-            worker = SingleReportWorker(self.patient, rep, self.user_id)
+            worker = SingleReportWorker(self.patient, rep, self.user_id,
+                                       user_orditem_id=prefetch_user_id)
             worker.progress.connect(lambda ord_no, pct: self.progress.emit(ord_no, pct))
             worker.report_done.connect(lambda m, r, s, e: self.report_done.emit(m, r, s, e))
             worker.finished.connect(self._on_report_finished)
