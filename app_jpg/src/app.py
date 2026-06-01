@@ -87,6 +87,66 @@ def _save_upload_info(driver, ord_no, user_orditem_id, file_path):
     result = driver.execute_script(script)
     return result
 
+def _save_result(driver, mrn, user_id, arcim_main, arcim_sub, cur_loc_id="343"):
+    """
+    调用 SaveResult，通知医嘱被执行
+    签名: SaveResult(peRecNo, resultText, userInternalID, arcimMain, arcimSub, curLocID)
+    """
+    script = f"""
+    try {{
+        var r = tkMakeServerCall('web.DHCPE.Interface.Main','SaveResult',
+            '{mrn}', '参见报告', '{user_id}', '{arcim_main}', '{arcim_sub}', '{cur_loc_id}');
+        return r;
+    }} catch(e) {{
+        return 'ERR:'+e.message;
+    }}
+    """
+    result = driver.execute_script(script)
+    if result and str(result).startswith("ERR"):
+        raise RuntimeError(result)
+    return result.strip()
+
+def _do_ftps_clear_folder(ord_no):
+    """清空 FTP 服务器上 dhcpeftp/images/{ord_no}/ 目录下的所有文件"""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    try:
+        ftps = ftplib.FTP_TLS(context=ctx)
+        ftps.connect(FTP_CONFIG["host"], FTP_CONFIG["port"], timeout=8)
+        ftps.login(FTP_CONFIG["username"], FTP_CONFIG["password"])
+        ftps.prot_p()
+        ftps.cwd("dhcpeftp")
+        ftps.cwd("images")
+        ftps.cwd(str(ord_no))
+        files = ftps.nlst()
+        for f in files:
+            if f not in ('.', '..'):
+                try:
+                    ftps.voidcmd(f"DELE {f}")
+                except Exception:
+                    pass
+        ftps.quit()
+    except Exception:
+        pass
+
+def _do_ftps_upload_single(ord_no, local_file, remote_name):
+    """FTP上传单个文件（二进制 STOR），不清空目录"""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    ftps = ftplib.FTP_TLS(context=ctx)
+    ftps.connect(FTP_CONFIG["host"], FTP_CONFIG["port"], timeout=8)
+    ftps.login(FTP_CONFIG["username"], FTP_CONFIG["password"])
+    ftps.prot_p()
+    ftps.cwd("dhcpeftp")
+    ftps.cwd("images")
+    ftps.cwd(str(ord_no))
+    with open(local_file, "rb") as fp:
+        ftps.storbinary(f"STOR {remote_name}", fp)
+    ftps.quit()
+    return True
+
 def _do_ftps_clear_and_upload(ord_no, local_file, remote_name):
     """FTP上传（STODB二进制），目录已存在则先NLST再DELE再STOR"""
     ctx = ssl.create_default_context()
@@ -1352,6 +1412,10 @@ class SingleReportWorker(QThread):
         self.report_done.emit(mrn, rep, None, "")
 
         try:
+            # SaveResult：通知服务器医嘱已执行
+            arcim_main = str(rep.arcim or "").split("^")[0]
+            arcim_sub = getattr(rep, "arcim_sub", "")
+            _save_result(self.driver, mrn, user_orditem_id, arcim_main, arcim_sub, "343")
             jpg_count = self._upload_single(rep)
             self.progress.emit(rep.ord_no, 80)
             for pg in range(jpg_count):
@@ -1393,9 +1457,14 @@ class SingleReportWorker(QThread):
         doc.close()
         if not jpg_paths:
             raise RuntimeError("无可上传页")
+        cleared = False
         for i, jpg_path in enumerate(jpg_paths):
             remote_name = f"{report.ord_no}_{i}.jpg"
-            _do_ftps_clear_and_upload(report.ord_no, jpg_path, remote_name)
+            # 第一张JPG：先检测并清空已有文件，再上传
+            if not cleared:
+                _do_ftps_clear_folder(report.ord_no)
+                cleared = True
+            _do_ftps_upload_single(report.ord_no, jpg_path, remote_name)
             os.unlink(jpg_path)
             self.progress.emit(report.ord_no, int(30 + (i + 1) / len(jpg_paths) * 50))
         return len(jpg_paths)
