@@ -20,7 +20,8 @@ from PyQt5.QtWidgets import (
     QListWidget, QListWidgetItem, QProgressBar, QMessageBox,
     QInputDialog, QScrollArea, QApplication,
     QMainWindow, QFrame, QDialog, QLineEdit, QGridLayout as QGL,
-    QDialogButtonBox, QFileDialog, QSizePolicy
+    QDialogButtonBox, QFileDialog, QSizePolicy, QTableWidget,
+    QTableWidgetItem, QAbstractItemView
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer
 from PyQt5.QtGui import QFont, QPalette, QBrush, QColor
@@ -210,11 +211,12 @@ def log_append(mrn, device, user_id, status, extra=""):
 # ============================================================
 
 class SettingsDialog(QDialog):
-    def __init__(self, current_base_dir, current_output_dir, parent=None):
+    def __init__(self, current_base_dir, current_output_dir, current_devices, parent=None):
         super().__init__(parent)
         self.setWindowTitle("设置")
         self.setModal(True)
-        self.setFixedSize(480, 200)
+        self.setFixedSize(480, 260)
+        self._devices = list(current_devices)  # 复制
 
         gl = QGL(self)
         gl.setContentsMargins(24, 24, 24, 24)
@@ -240,18 +242,33 @@ class SettingsDialog(QDialog):
         btn_out.clicked.connect(self._browse_out)
         gl.addWidget(btn_out, 1, 2)
 
+        # 设备配置
+        gl.addWidget(QLabel("设备映射:"), 2, 0)
+        dev_row = QHBoxLayout()
+        dev_label = QLabel(f"{len(current_devices)} 个设备")
+        dev_label.setStyleSheet("color: #666; font-size: 12px;")
+        dev_row.addWidget(dev_label)
+        dev_row.addStretch()
+        btn_dev = QPushButton("设备配置...")
+        btn_dev.setFixedWidth(90)
+        btn_dev.clicked.connect(self._open_device_config)
+        dev_row.addWidget(btn_dev)
+        w = QWidget()
+        w.setLayout(dev_row)
+        gl.addWidget(w, 2, 1, 1, 2)
+
         # 按钮
-        row2 = QHBoxLayout()
-        row2.addStretch()
+        row3 = QHBoxLayout()
+        row3.addStretch()
         cancel_btn = QPushButton("取消")
         cancel_btn.setStyleSheet("padding: 8px 20px; border: 1px solid #D1D1D6; border-radius: 8px; background: white; color: #333; font-size: 13px;")
         cancel_btn.clicked.connect(self.reject)
         save_btn = QPushButton("保存")
         save_btn.setStyleSheet("padding: 8px 20px; border: none; border-radius: 8px; background: #0066CC; color: white; font-size: 13px; font-weight: 600;")
         save_btn.clicked.connect(self._on_save)
-        row2.addWidget(cancel_btn)
-        row2.addWidget(save_btn)
-        gl.addLayout(row2, 2, 0, 1, 3)
+        row3.addWidget(cancel_btn)
+        row3.addWidget(save_btn)
+        gl.addLayout(row3, 3, 0, 1, 3)
 
     def _browse_base(self):
         d = QFileDialog.getExistingDirectory(self, "选择PDF报告文件夹", self.le_base.text())
@@ -262,6 +279,16 @@ class SettingsDialog(QDialog):
         d = QFileDialog.getExistingDirectory(self, "选择保存位置", self.le_out.text())
         if d:
             self.le_out.setText(d)
+
+    def _open_device_config(self):
+        dlg = DeviceConfigDialog(self._devices, self)
+        if dlg.exec_() == QDialog.Accepted:
+            self._devices = dlg.result_devices
+            # 更新显示的设备数量
+            for child in self.findChildren(QLabel):
+                if "个设备" in child.text():
+                    child.setText(f"{len(self._devices)} 个设备")
+                    break
 
     def _on_save(self):
         self._base_dir = self.le_base.text().strip()
@@ -275,6 +302,98 @@ class SettingsDialog(QDialog):
     @property
     def output_dir(self):
         return getattr(self, '_output_dir', '')
+
+    @property
+    def devices(self):
+        return getattr(self, '_devices', [])
+
+
+# ============================================================
+# 设备配置对话框
+# ============================================================
+
+class DeviceConfigDialog(QDialog):
+    def __init__(self, devices, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("设备配置")
+        self.setModal(True)
+        self.setFixedSize(560, 420)
+        self.devices = devices  # [{"name": "", "urcode": "", "arcim": ""}]
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(8)
+
+        # 表头
+        header = QLabel("设备名称（需与PDF报告文件夹子文件夹名称一致）")
+        layout.addWidget(header)
+
+        # 表格
+        self.table = QTableWidget()
+        self.table.setColumnCount(3)
+        self.table.setHorizontalHeaderLabels(["设备名称", "URCode", "ARCIM"])
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setColumnWidth(0, 200)
+        self.table.setColumnWidth(1, 100)
+        self.table.setColumnWidth(2, 200)
+        self.table.setAlternatingRowColors(True)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._populate()
+        layout.addWidget(self.table)
+
+        # 添加/删除按钮
+        btn_row = QHBoxLayout()
+        add_btn = QPushButton("+ 添加设备")
+        add_btn.clicked.connect(self._add_row)
+        del_btn = QPushButton("删除选中")
+        del_btn.clicked.connect(self._delete_row)
+        btn_row.addWidget(add_btn)
+        btn_row.addWidget(del_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        # 确定/取消
+        bottom = QHBoxLayout()
+        bottom.addStretch()
+        cancel_btn = QPushButton("取消")
+        cancel_btn.setStyleSheet("padding: 8px 20px; border: 1px solid #D1D1D6; border-radius: 8px; background: white; color: #333; font-size: 13px;")
+        cancel_btn.clicked.connect(self.reject)
+        save_btn = QPushButton("保存")
+        save_btn.setStyleSheet("padding: 8px 20px; border: none; border-radius: 8px; background: #0066CC; color: white; font-size: 13px; font-weight: 600;")
+        save_btn.clicked.connect(self._on_save)
+        bottom.addWidget(cancel_btn)
+        bottom.addWidget(save_btn)
+        layout.addLayout(bottom)
+
+    def _populate(self):
+        self.table.setRowCount(len(self.devices))
+        for i, dev in enumerate(self.devices):
+            self.table.setItem(i, 0, QTableWidgetItem(dev.get("name", "")))
+            self.table.setItem(i, 1, QTableWidgetItem(dev.get("urcode", "")))
+            self.table.setItem(i, 2, QTableWidgetItem(dev.get("arcim", "")))
+
+    def _add_row(self):
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+
+    def _delete_row(self):
+        r = self.table.currentRow()
+        if r >= 0:
+            self.table.removeRow(r)
+
+    def _on_save(self):
+        self.devices = []
+        for i in range(self.table.rowCount()):
+            name = (self.table.item(i, 0) or QTableWidgetItem("")).text().strip()
+            urcode = (self.table.item(i, 1) or QTableWidgetItem("")).text().strip()
+            arcim = (self.table.item(i, 2) or QTableWidgetItem("")).text().strip()
+            if name:
+                self.devices.append({"name": name, "urcode": urcode, "arcim": arcim})
+        self.accept()
+
+    @property
+    def result_devices(self):
+        return self.devices
 
 
 # ============================================================
@@ -440,7 +559,7 @@ class AlreadyUploadedDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SZU 体检报告上传")
+        self.setWindowTitle("SZU体检检查报告批量上传")
         self.resize(900, 700)
         self.setMinimumWidth(900)
         self.setMinimumHeight(700)
@@ -452,6 +571,7 @@ class MainWindow(QMainWindow):
             alt = '/Users/jeffreykang/Documents/体检报告上传'
             if os.path.exists(alt):
                 self.config['base_dir'] = alt
+        self._apply_device_map()
         self.patients = []
         self.current_idx = 0
         self.current_page = 0
@@ -586,6 +706,8 @@ class MainWindow(QMainWindow):
             "font-size: 16px; color: #333; padding: 2px 6px; background: white;")
         self.btn_next.clicked.connect(self._on_next)
         pnl.addWidget(self.btn_next)
+        # 插入 stretch 把 page_nav 推到横向居中
+        btml.insertStretch(1)
         btml.addWidget(page_nav)
 
         btml.addStretch()
@@ -897,10 +1019,25 @@ class MainWindow(QMainWindow):
 
     # ---- settings ----
 
+    def _apply_device_map(self):
+        """将 config 中的 devices 转换为运行时映射格式并应用"""
+        global _RUNTIME_DEVICE_MAP
+        cfg = self.config.get('devices', [])
+        if not cfg:
+            _RUNTIME_DEVICE_MAP = []
+            return
+        # config 格式: [{"name": "肺功能", "urcode": "SZU04", "arcim": "592||1"}, ...]
+        # 转为: [{"devices": ["肺功能"], "urcode": "SZU04", "arcim": "592||1"}, ...]
+        _RUNTIME_DEVICE_MAP = [
+            {"devices": [d["name"]], "urcode": d.get("urcode", ""), "arcim": d.get("arcim", "")}
+            for d in cfg if d.get("name", "").strip()
+        ]
+
     def _on_settings(self):
         dlg = SettingsDialog(
             self.config.get('base_dir', ''),
             self.config.get('desktop_output_dir', ''),
+            self.config.get('devices', []),
             self
         )
         if dlg.exec_() == QDialog.Accepted:
@@ -908,6 +1045,9 @@ class MainWindow(QMainWindow):
                 self.config['base_dir'] = dlg.base_dir
             if dlg.output_dir:
                 self.config['desktop_output_dir'] = dlg.output_dir
+            if dlg.devices:
+                self.config['devices'] = dlg.devices
+                self._apply_device_map()
             ConfigManager().save(self.config)
             QMessageBox.information(self, "提示", "设置已保存。下次扫描时会使用新的文件夹路径。")
 
@@ -1321,8 +1461,8 @@ class ReportRecord:
         self._resolve_device()
 
     def _resolve_device(self):
-        # device_name → urcode / arcim
-        for row in DEVICE_URCODE_MAP:
+        # device_name → urcode / arcim（从运行时映射或默认映射）
+        for row in _get_device_map():
             if self.device_name in row['devices']:
                 self.urcode = row['urcode']
                 self.arcim = row['arcim']
@@ -1344,6 +1484,7 @@ class ReportRecord:
 
 # ============================================================
 # 设备 → URCODE/ARCIM 映射（与 batch_upload_jpg.py 一致）
+# 默认值；设置里修改后会通过 _apply_device_map() 覆盖
 # ============================================================
 
 DEVICE_URCODE_MAP = [
@@ -1360,6 +1501,16 @@ DEVICE_URCODE_MAP = [
     {"devices": ["食物特异性IgG抗体"], "urcode": "SZU14", "arcim": ""},
     {"devices": ["肝纤维化扫描"], "urcode": "SZU16", "arcim": "35791||1"},
 ]
+
+# 运行时设备映射（设置保存后从此读取；空则回退到 DEVICE_URCODE_MAP）
+_RUNTIME_DEVICE_MAP = []
+
+
+def _get_device_map():
+    """返回当前生效的设备映射：优先运行时覆盖，否则用默认值"""
+    if _RUNTIME_DEVICE_MAP:
+        return _RUNTIME_DEVICE_MAP
+    return DEVICE_URCODE_MAP
 
 
 # ============================================================
