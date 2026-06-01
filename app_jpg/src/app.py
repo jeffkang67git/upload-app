@@ -31,10 +31,10 @@ CARDS_PER_PAGE = 6
 CSP_PAGE_TPL = "https://10.1.9.105:1443/imedical/web/csp/dhcpe.uploadchkresult.csp?URCode={urcode}&CurLocID=343"
 
 FTP_CONFIG = {
-    "host": "10.1.1.178",
-    "port": 9021,
-    "username": "dhcpeftp",
-    "password": "Fty@12345",
+    "host": "10.1.9.105",
+    "port": 2121,
+    "username": "dhccftp",
+    "password": "Dhcc123!qwe",
 }
 
 DEVICE_LIST = [
@@ -280,8 +280,9 @@ class OrdFetchWorker(QThread):
 
                 script = f"""
                 try {{
+                    var arcim_main = '{rep.arcim}'.split('^')[0];
                     var r = tkMakeServerCall('web.DHCPE.Interface.Main', 'GetBaseInfo',
-                                  '{mrn}', '{rep.arcim}', 'HPNo', '343');
+                                  '{mrn}', arcim_main, 'HPNo', '343');
                     return r;
                 }} catch(e) {{
                     return 'ERR:' + e.message;
@@ -384,8 +385,7 @@ class MainWindow(QMainWindow):
         self.current_page = 0
         self._ord_fetch_worker = None
         self._upload_workers = {}  # mrn -> UploadWorker
-        self._pending_uploads = {}  # mrn -> (user_id, user_orditem_id)
-        self._active_driver = None
+        self._pending_uploads = {}  # mrn -> user_id
         self._destroyed = False  # 防止窗口销毁后回调崩溃
 
         # 应用启动后自动扫描一次
@@ -852,34 +852,26 @@ class MainWindow(QMainWindow):
         self._fetch_ord_and_upload(user_id)
 
     def _fetch_ord_and_upload(self, user_id_input):
-        """启动 ord_fetch worker，获取医嘱号（不阻塞，不弹窗）"""
+        """启动上传worker（ord_no获取和上传都在worker内顺序执行，不阻塞主线程）"""
         current = self.patients[self.current_idx] if 0 <= self.current_idx < len(self.patients) else None
         if not current:
             QMessageBox.warning(self, "提示", "没有选中的患者")
             return
 
-        # 启动浏览器
-        driver = None
-        try:
-            driver = _make_chrome_driver()
-            driver.set_page_load_timeout(15)
-            first_urcode = current.reports[0].urcode or "SZU06"
-            driver.get(CSP_PAGE_TPL.format(urcode=first_urcode))
-            time.sleep(5)
-        except Exception as e:
-            QMessageBox.warning(self, "错误", f"无法打开浏览器: {e}")
+        if not any(r.urcode for r in current.reports):
+            QMessageBox.warning(self, "提示", "没有可上传的报告（无URCODE）")
             return
 
-        # 启动 ord_fetch worker
-        self._ord_fetch_worker = OrdFetchWorker(driver, current, user_id_input)
-        self._ord_fetch_worker.progress.connect(self._on_ord_fetch_progress)
-        self._ord_fetch_worker.done.connect(lambda m: self._on_ord_fetch_done(m, user_id_input))
-        self._ord_fetch_worker.start()
-
-        # 实时更新卡片
-        self._ord_fetch_timer = QTimer()
-        self._ord_fetch_timer.timeout.connect(self._render_cards)
-        self._ord_fetch_timer.start(500)
+        # 每报告独立 worker，互相并行
+        mrn = current.mrn
+        worker = UploadWorker(current, user_id_input)
+        worker.progress.connect(self._on_upload_progress)
+        worker.report_done.connect(self._on_upload_report_done)
+        worker.finished.connect(lambda m: self._on_upload_finished(m, user_id_input))
+        self._upload_workers[mrn] = worker
+        worker.start()
+        self._update_patient_list_items()
+        self._render_cards()
 
     def _on_ord_fetch_progress(self, mrn, device, ord_no, status_msg):
         """ord_fetch 实时更新卡片上的医嘱号显示"""
@@ -891,55 +883,52 @@ class MainWindow(QMainWindow):
             self._ord_fetch_timer.stop()
         driver = self._ord_fetch_worker.driver if self._ord_fetch_worker else None
         self._ord_fetch_worker = None
-        self._do_upload(user_id_input, driver)
+        self._do_upload(user_id_input)
 
-    def _do_upload(self, user_id_input, driver=None):
-        """启动上传worker"""
+    def _do_upload(self, user_id_input):
+        """启动并行上传：每报告独立worker，签名后显示进度遮罩"""
         current = self.patients[self.current_idx] if 0 <= self.current_idx < len(self.patients) else None
         if not current:
             return
 
-        valid = [rep for rep in current.reports
-                 if rep.ord_no and not str(rep.ord_no).startswith("ERR")]
-        if not valid:
-            QMessageBox.warning(self, "提示", "没有有效报告可上传")
+        if not any(r.urcode for r in current.reports):
+            QMessageBox.warning(self, "提示", "没有可上传的报告（无URCODE）")
             return
 
-        # GetUserID 验证签字人
-        try:
-            user_orditem_id = _get_user_id(driver, user_id_input, "343", valid[0].arcim)
-            log_append("SYSTEM", "GetUserID", user_id_input, "user_verified", user_orditem_id)
-        except Exception as e:
-            driver.quit()
-            QMessageBox.warning(self, "错误", f"签字人验证失败: {e}")
-            return
+        # 显示进度遮罩
+        self._show_upload_overlay()
 
-        # 检查 FTP 目录，对每份已存在的报告弹出确认框
-        for rep in valid:
-            if self._ftp_dir_exists(rep.ord_no):
-                dlg = AlreadyUploadedDialog(current.mrn, rep.display_device, rep.ord_no, self)
-                resp = dlg.exec_()
-                if resp == QDialog.Rejected:
-                    # 跳过这份
-                    rep.status = "cancel"
-                # Yes: 由 worker 清空后重新上传
-
-        # 更新状态
-        for rep in valid:
-            if rep.status not in ("done", "cancel"):
-                rep.status = "pending"
-
-        # 启动 UploadWorker
+        # 每报告独立 worker，互相并行
         mrn = current.mrn
-        worker = UploadWorker(driver, current, user_id_input, user_orditem_id)
+        worker = UploadWorker(current, user_id_input)
         worker.progress.connect(self._on_upload_progress)
         worker.report_done.connect(self._on_upload_report_done)
         worker.finished.connect(lambda m: self._on_upload_finished(m, user_id_input))
         self._upload_workers[mrn] = worker
-        self._active_driver = driver
         worker.start()
         self._update_patient_list_items()
         self._render_cards()
+
+    def _show_upload_overlay(self):
+        """签名后立即显示半透明进度遮罩"""
+        if hasattr(self, '_upload_overlay') and self._upload_overlay:
+            return
+        overlay = QWidget(self.centralWidget())
+        overlay.setStyleSheet("background: rgba(0,0,0,0.45);")
+        overlay.setGeometry(0, 0, self.width(), self.height())
+        lbl = QLabel(overlay)
+        lbl.setStyleSheet("color: white; font-size: 16px; font-weight: 600;")
+        lbl.setText("上传中，请稍候...")
+        lbl.setAlignment(Qt.AlignCenter)
+        lbl.resize(300, 50)
+        lbl.move(overlay.width() // 2 - 150, overlay.height() // 2 - 25)
+        overlay.show()
+        self._upload_overlay = overlay
+
+    def _hide_upload_overlay(self):
+        if hasattr(self, '_upload_overlay') and self._upload_overlay:
+            self._upload_overlay.close()
+            self._upload_overlay = None
 
     def _ftp_dir_exists(self, ord_no):
         try:
@@ -972,14 +961,9 @@ class MainWindow(QMainWindow):
         self._update_patient_list_items()
 
     def _on_upload_finished(self, mrn, user_id):
+        self._hide_upload_overlay()
         if mrn in self._upload_workers:
             del self._upload_workers[mrn]
-        if self._active_driver:
-            try:
-                self._active_driver.quit()
-            except Exception:
-                pass
-            self._active_driver = None
 
         for patient in self.patients:
             if patient.mrn == mrn:
@@ -1246,11 +1230,18 @@ class ReportRecord:
 # ============================================================
 
 DEVICE_URCODE_MAP = [
-    {"devices": ["人体成分分析4楼", "人体成分分析9楼"], "urcode": "SZU05", "arcim": "6930||1"},
-    {"devices": ["肺功能", "肺功能9楼"], "urcode": "SZU06", "arcim": "77||1"},
-    {"devices": ["airdoc", "Airdoc 4楼"], "urcode": "SZU01", "arcim": "4113||1"},
-    {"devices": ["动脉硬化检测仪", "动脉硬化检测仪9F"], "urcode": "SZU04", "arcim": "77||2"},
-    {"devices": ["肝纤维化扫描"], "urcode": "SZU03", "arcim": "4115||1"},
+    {"devices": ["人体成分分析4楼", "人体成分分析9楼"], "urcode": "SZU01", "arcim": "6930||1^77||2"},
+    {"devices": ["尿流量3楼"], "urcode": "SZU03", "arcim": ""},
+    {"devices": ["肺功能", "肺功能9楼"], "urcode": "SZU04", "arcim": "592||1"},
+    {"devices": ["airdoc", "Airdoc 4楼"], "urcode": "SZU06", "arcim": "8249||1^304||1"},
+    {"devices": ["动脉硬化检测仪", "动脉硬化检测仪9F"], "urcode": "SZU07", "arcim": "7970||1"},
+    {"devices": ["PAP Smear", "PAP Smear 4楼护士站"], "urcode": "SZU08", "arcim": ""},
+    {"devices": ["Stool DNA"], "urcode": "SZU09", "arcim": ""},
+    {"devices": ["循环肿瘤DNA"], "urcode": "SZU10", "arcim": ""},
+    {"devices": ["脑电图"], "urcode": "SZU11", "arcim": ""},
+    {"devices": ["遗传性肿瘤"], "urcode": "SZU12", "arcim": ""},
+    {"devices": ["食物特异性IgG抗体"], "urcode": "SZU14", "arcim": ""},
+    {"devices": ["肝纤维化扫描"], "urcode": "SZU16", "arcim": "35791||1"},
 ]
 
 
@@ -1258,22 +1249,21 @@ DEVICE_URCODE_MAP = [
 # 上传线程（独立worker，per-report信号）
 # ============================================================
 
-class UploadWorker(QThread):
+class SingleReportWorker(QThread):
     """
-    每份报告上传时发出 progress(ord_no, pct) 信号；
-    单份完成时发出 report_done(patient_mrn, rep, success, error_msg)；
-    全部完成时发出 finished(patient_mrn)。
+    单报告worker：独立browser，独立线程。
+    处理一份报告的完整流程：GetUserID → GetBaseInfo → FTP上传 → SaveUploadInfo
     """
     progress = pyqtSignal(str, int)  # (ord_no, pct)
     report_done = pyqtSignal(str, object, object, str)  # (mrn, rep, success_or_None, err)
-    finished = pyqtSignal(str)  # (patient_mrn,)
+    finished = pyqtSignal(str, object)  # (mrn, rep)
 
-    def __init__(self, driver, patient, user_id, user_orditem_id, parent=None):
+    def __init__(self, patient, rep, user_id, parent=None):
         super().__init__(parent)
-        self.driver = driver
         self.patient = patient
+        self.rep = rep
         self.user_id = user_id
-        self.user_orditem_id = user_orditem_id
+        self.driver = None
         self._cancelled = False
 
     def cancel(self):
@@ -1281,63 +1271,116 @@ class UploadWorker(QThread):
 
     def run(self):
         mrn = self.patient.mrn
-        reports = [r for r in self.patient.reports
-                   if r.ord_no and not str(r.ord_no).startswith("ERR")]
+        rep = self.rep
 
-        for idx, rep in enumerate(reports):
-            if self._cancelled:
-                rep.status = "cancel"
-                self.report_done.emit(mrn, rep, False, "用户取消")
-                continue
+        # 创建独立浏览器
+        try:
+            self.driver = _make_chrome_driver()
+            self.driver.set_page_load_timeout(15)
+        except Exception as e:
+            log_append(mrn, rep.device_name, self.user_id, "browser_fail", str(e))
+            rep.status = "fail"
+            rep.ord_no = f"ERR:{e}"
+            self.report_done.emit(mrn, rep, False, str(e))
+            self.finished.emit(mrn, rep)
+            return
 
-            if rep.status == "cancel":
-                continue
+        # GetUserID（每报告签一次，但可并行）
+        try:
+            arcim = str(rep.arcim or "").split('^')[0]
+            user_orditem_id = _get_user_id(self.driver, self.user_id, "343", arcim)
+            log_append(mrn, rep.device_name, self.user_id, "user_verified", user_orditem_id)
+        except Exception as e:
+            log_append(mrn, rep.device_name, self.user_id, "user_fail", str(e))
+            rep.status = "fail"
+            rep.ord_no = f"ERR:{e}"
+            self.report_done.emit(mrn, rep, False, str(e))
+            self.driver = None
+            self.finished.emit(mrn, rep)
+            return
 
-            total = len(reports)
-            rep.status = "uploading"
-            rep.progress = 0
-            self.progress.emit(rep.ord_no, 5)
-            self.report_done.emit(mrn, rep, None, "")  # None=进行中
-
+        # ord_no 已有效则跳过获取
+        ord_no = rep.ord_no
+        if not ord_no or str(ord_no).startswith("ERR"):
             try:
-                # FTP上传 + SaveUploadInfo
-                jpg_count = self._upload_single(rep)
-                self.progress.emit(rep.ord_no, 80)
+                self.driver.get(CSP_PAGE_TPL.format(urcode=rep.urcode))
+                import time as _t
+                for _ in range(15):
+                    try:
+                        ready = self.driver.execute_script(
+                            "try { return typeof tkMakeServerCall === 'function'; } catch(e) { return false; }")
+                        if ready:
+                            break
+                    except Exception:
+                        pass
+                    _t.sleep(1)
+                else:
+                    raise RuntimeError("页面加载超时")
 
-                for pg in range(jpg_count):
-                    fp = f"dhcpeftp/images/{rep.ord_no}/{rep.ord_no}_{pg}.jpg"
-                    _save_upload_info(self.driver, rep.ord_no, self.user_orditem_id, fp)
-
-                rep.status = "done"
-                rep.progress = 100
-                self.progress.emit(rep.ord_no, 100)
-                self.report_done.emit(mrn, rep, True, "")
-                log_append(mrn, rep.device_name, self.user_id, "uploaded", rep.ord_no)
-
+                arcim_main = str(rep.arcim or "").split('^')[0]
+                script = f"""
+                try {{
+                    var r = tkMakeServerCall('web.DHCPE.Interface.Main', 'GetBaseInfo',
+                                  '{mrn}', '{arcim_main}', 'HPNo', '343');
+                    return r;
+                }} catch(e) {{
+                    return 'ERR:' + e.message;
+                }}
+                """
+                result = self.driver.execute_script(script)
+                if not result or str(result).startswith("ERR") or result == "NoHP":
+                    raise RuntimeError(f"GetBaseInfo: {result or 'NoHP'}")
+                fields = str(result).split("^")
+                if len(fields) < 8:
+                    raise RuntimeError(f"解析失败: {result}")
+                ord_no = fields[7].strip()
+                rep.ord_no = ord_no
+                rep.arcim_sub = fields[8].strip() if len(fields) >= 9 else ""
+                log_append(mrn, rep.device_name, self.user_id, "ord_found", ord_no)
             except Exception as e:
+                rep.ord_no = f"ERR:{e}"
                 rep.status = "fail"
-                rep.error_msg = str(e)
-                rep.progress = 0
-                self.progress.emit(rep.ord_no, 0)
                 self.report_done.emit(mrn, rep, False, str(e))
-                log_append(mrn, rep.device_name, self.user_id, "upload_fail", str(e))
+                log_append(mrn, rep.device_name, self.user_id, "ord_fail", str(e))
+                self.driver = None
+                self.finished.emit(mrn, rep)
+                return
 
-        self.finished.emit(mrn)
+        # FTP上传 + SaveUploadInfo
+        rep.status = "uploading"
+        rep.progress = 0
+        self.report_done.emit(mrn, rep, None, "")
+
+        try:
+            jpg_count = self._upload_single(rep)
+            self.progress.emit(rep.ord_no, 80)
+            for pg in range(jpg_count):
+                fp = f"dhcpeftp/images/{rep.ord_no}/{rep.ord_no}_{pg}.jpg"
+                _save_upload_info(self.driver, rep.ord_no, user_orditem_id, fp)
+            rep.status = "done"
+            rep.progress = 100
+            self.progress.emit(rep.ord_no, 100)
+            self.report_done.emit(mrn, rep, True, "")
+            log_append(mrn, rep.device_name, self.user_id, "uploaded", rep.ord_no)
+        except Exception as e:
+            rep.status = "fail"
+            rep.error_msg = str(e)
+            rep.progress = 0
+            self.progress.emit(rep.ord_no, 0)
+            self.report_done.emit(mrn, rep, False, str(e))
+            log_append(mrn, rep.device_name, self.user_id, "upload_fail", str(e))
+
+        self.driver = None
+        self.finished.emit(mrn, rep)
 
     def _upload_single(self, report):
-        """PDF→JPG列表，逐页FTPS上传"""
         pdf_path = str(report.pdf_path)
-
-        # 已有 ord_status='found' 但没有 ord_no -> 从 report 对象取
         if not report.ord_no:
             raise RuntimeError("无医嘱号")
-
-        # PDF → JPG 列表
         try:
             doc = fitz.open(pdf_path)
         except Exception as e:
             raise RuntimeError(f"PDF打开失败: {e}")
-
         jpg_paths = []
         for page_num in range(len(doc)):
             page = doc[page_num]
@@ -1348,15 +1391,52 @@ class UploadWorker(QThread):
             tmp.close()
             jpg_paths.append(tmp.name)
         doc.close()
-
         if not jpg_paths:
             raise RuntimeError("无可上传页")
-
-        # 逐页上传
         for i, jpg_path in enumerate(jpg_paths):
             remote_name = f"{report.ord_no}_{i}.jpg"
             _do_ftps_clear_and_upload(report.ord_no, jpg_path, remote_name)
             os.unlink(jpg_path)
             self.progress.emit(report.ord_no, int(30 + (i + 1) / len(jpg_paths) * 50))
-
         return len(jpg_paths)
+
+
+class UploadWorker(QThread):
+    """
+    协调者：每份报告起一个独立SingleReportWorker，互相并行。
+    """
+    # 类级别信号（供外部连接）
+    progress = pyqtSignal(str, int)
+    report_done = pyqtSignal(str, object, object, str)
+    finished = pyqtSignal(str)
+    finished_worker = pyqtSignal(str, object)  # (mrn, rep) 供协调者内部用
+
+    def __init__(self, patient, user_id, parent=None):
+        super().__init__(parent)
+        self.patient = patient
+        self.user_id = user_id
+        self._workers = {}  # rep → SingleReportWorker
+        self._completed = 0
+
+    def run(self):
+        reports = [r for r in self.patient.reports if r.urcode and r.status != "cancel"]
+        if not reports:
+            return
+
+        for rep in reports:
+            rep.status = "pending"
+            worker = SingleReportWorker(self.patient, rep, self.user_id)
+            worker.progress.connect(lambda ord_no, pct: self.progress.emit(ord_no, pct))
+            worker.report_done.connect(lambda m, r, s, e: self.report_done.emit(m, r, s, e))
+            worker.finished.connect(self._on_report_finished)
+            self._workers[rep] = worker
+            worker.start()
+
+    def _on_report_finished(self, mrn, rep):
+        self._completed += 1
+        self.finished_worker.emit(mrn, rep)
+        if self._completed >= len(self._workers):
+            self.finished.emit(mrn)
+
+
+
