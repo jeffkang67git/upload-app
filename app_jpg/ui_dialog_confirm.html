@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>SZU体检报告批量上传 - 确认弹窗</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; height: 100vh; }
+
+  .dialog { background: white; border-radius: 14px; width: 420px; overflow: hidden; box-shadow: 0 20px 80px rgba(0,0,0,0.35); }
+
+  /* Dialog header */
+  .d-header { background: #FAFAFA; border-bottom: 1px solid #F0F0F0; padding: 0 16px; height: 44px; display: flex; align-items: center; }
+  .d-header .dots { display: flex; gap: 6px; margin-right: 16px; }
+  .d-header .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .dot.r { background: #FF5F57; } .dot.y { background: #FEBC2E; } .dot.g { background: #28C840; }
+  .d-header .title { font-size: 14px; font-weight: 600; color: #333; margin-left: 8px; }
+
+  /* Dialog body */
+  .d-body { padding: 24px 28px 20px; }
+  .d-body .d-title { font-size: 16px; font-weight: 700; color: #1D1D1F; margin-bottom: 16px; }
+
+  .info-block { background: #F5F7FF; border: 1px solid #DDE8FF; border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .info-row { display: flex; justify-content: space-between; align-items: center; }
+  .info-row .lbl { font-size: 13px; color: #555; }
+  .info-row .val { font-size: 13px; font-weight: 600; color: #1D1D1F; }
+  .info-row .val.highlight { color: #0066CC; font-size: 15px; }
+  .info-row .val.warn { color: #FF3B30; }
+
+  .input-label { font-size: 12px; color: #555; margin-bottom: 6px; display: block; }
+  .input-field { width: 100%; padding: 9px 12px; border: 1px solid #D1D1D6; border-radius: 8px; font-size: 13px; color: #1D1D1F; outline: none; transition: border-color 0.15s; }
+  .input-field:focus { border-color: #0066CC; box-shadow: 0 0 0 3px rgba(0,102,204,0.12); }
+
+  .input-hint { font-size: 11px; color: #86868B; margin-top: 6px; }
+
+  /* Dialog footer */
+  .d-footer { padding: 0 28px 20px; display: flex; gap: 10px; justify-content: flex-end; }
+  .btn-cancel { padding: 9px 20px; border-radius: 8px; border: 1px solid #D1D1D6; background: white; color: #333; font-size: 13px; font-weight: 500; cursor: pointer; }
+  .btn-cancel:hover { background: #F5F5F7; }
+  .btn-confirm { padding: 9px 22px; border-radius: 8px; border: none; background: #0066CC; color: white; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .btn-confirm:hover { background: #0055AA; }
+  .btn-confirm:disabled { background: #C7C7CC; cursor: not-allowed; }
+</style>
+</head>
+<body>
+<div class="dialog">
+
+  <div class="d-header">
+    <div class="dots"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div>
+    <div class="title">确认上传</div>
+  </div>
+
+  <div class="d-body">
+    <div class="d-title">请核对签字并确认上传</div>
+
+    <div class="info-block">
+      <div class="info-row">
+        <span class="lbl">患者编号</span>
+        <span class="val highlight">1111111</span>
+      </div>
+      <div class="info-row">
+        <span class="lbl">报告数量</span>
+        <span class="val">6 份报告</span>
+      </div>
+      <div class="info-row">
+        <span class="lbl">上传至</span>
+        <span class="val">东华HIS · 10.1.9.105:1443</span>
+      </div>
+      <div class="info-row">
+        <span class="lbl">PDF合并保存至</span>
+        <span class="val">桌面</span>
+      </div>
+    </div>
+
+    <label class="input-label">签字（填写用户编号）</label>
+    <input class="input-field" type="text" placeholder="例如：zhangsan01" value="">
+    <div class="input-hint">签字人将记录在操作日志中</div>
+  </div>
+
+  <div class="d-footer">
+    <button class="btn-cancel">取消</button>
+    <button class="btn-confirm">确认上传</button>
+  </div>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>SZU体检报告批量上传 - UI设计</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif; background: #F2F4F7; color: #1D1D1F; font-size: 13px; }
+
+  .win { width: 1100px; height: 680px; margin: 20px auto; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 40px rgba(0,0,0,0.12); border: 1px solid #DEDFE3; display: flex; flex-direction: column; }
+
+  /* Title bar */
+  .titlebar { background: #FAFAFA; border-bottom: 1px solid #E5E5EA; padding: 0 16px; height: 44px; display: flex; align-items: center; flex-shrink: 0; }
+  .titlebar .dots { display: flex; gap: 6px; margin-right: 16px; }
+  .titlebar .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .dot.r { background: #FF5F57; } .dot.y { background: #FEBC2E; } .dot.g { background: #28C840; }
+  .titlebar .title { font-size: 14px; font-weight: 600; color: #333; margin-left: 8px; }
+
+  /* Header */
+  .header { background: #FFFFFF; padding: 12px 24px; display: flex; align-items: center; border-bottom: 1px solid #F0F0F0; flex-shrink: 0; }
+  .header h1 { font-size: 18px; font-weight: 700; color: #1D1D1F; }
+  .header .badge { background: #E8F4FF; color: #0066CC; font-size: 13px; font-weight: 600; padding: 4px 14px; border-radius: 20px; margin-left: auto; border: 1px solid #CCE4FF; }
+
+  /* Body: left + right */
+  .body { display: flex; flex: 1; min-height: 0; background: #FFFFFF; }
+
+  /* Left panel — scrollable */
+  .left { width: 190px; background: #FAFAFA; border-right: 1px solid #F0F0F0; display: flex; flex-direction: column; flex-shrink: 0; overflow: hidden; }
+  .section-title { font-size: 11px; font-weight: 600; color: #86868B; text-transform: uppercase; letter-spacing: 0.6px; padding: 10px 16px 8px; flex-shrink: 0; }
+  .patient-list { flex: 1; overflow-y: auto; }
+
+  .patient-item { padding: 9px 14px; cursor: pointer; display: flex; align-items: center; gap: 8px; border-left: 3px solid transparent; transition: all 0.15s; }
+  .patient-item:hover { background: #F0F0F5; }
+  .patient-item.active { background: #E8F4FF; border-left-color: #0066CC; }
+  .patient-item .avatar { width: 26px; height: 26px; border-radius: 50%; background: #0066CC; color: white; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; flex-shrink: 0; }
+  .patient-item .info { flex: 1; min-width: 0; }
+  .patient-item .info .name { font-size: 13px; font-weight: 500; color: #1D1D1F; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .patient-item .info .sub { font-size: 11px; color: #86868B; }
+  .patient-item .status-dot { width: 6px; height: 6px; border-radius: 50%; background: #C7C7CC; flex-shrink: 0; }
+  .patient-item .status-dot.ok { background: #28C840; }
+
+  /* Right panel */
+  .right { flex: 1; padding: 12px 20px 12px 16px; display: flex; flex-direction: column; gap: 10px; min-width: 0; overflow: hidden; }
+
+  .patient-header { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+  .patient-header .label { font-size: 12px; color: #86868B; }
+  .patient-header .mrn { font-size: 13px; font-weight: 600; color: #1D1D1F; }
+
+  /* Fixed-height 2-col card grid: 5 rows × 5 rows visible */
+  .cards-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; flex-shrink: 0; height: 490px; content-baseline: stretch; align-content: start; }
+
+  .report-card { border: 1px solid #E8E8ED; border-radius: 10px; padding: 11px 13px; display: flex; align-items: center; gap: 11px; transition: all 0.15s; }
+  .report-card:hover { border-color: #0066CC; box-shadow: 0 2px 10px rgba(0,102,204,0.09); }
+  .report-card.previewed { border-color: #CCE4FF; background: #FAFCFF; }
+
+  .card-thumb { width: 46px; height: 60px; background: #F5F5F7; border: 1px solid #E0E0E4; border-radius: 5px; display: flex; align-items: center; justify-content: center; font-size: 22px; color: #C7C7CC; flex-shrink: 0; }
+  .card-info { flex: 1; min-width: 0; }
+  .card-device { font-size: 13px; font-weight: 600; color: #1D1D1F; }
+  .card-ord { font-size: 11px; color: #555; margin-top: 4px; display: flex; align-items: center; gap: 4px; }
+  .tag { background: #F0F0F5; padding: 2px 8px; border-radius: 10px; font-size: 11px; color: #555; }
+  .tag.err { background: #FFE8E8; color: #FF3B30; }
+
+  .card-right { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; flex-shrink: 0; }
+  .btn-preview { padding: 4px 14px; border-radius: 6px; border: 1px solid #0066CC; color: #0066CC; background: white; font-size: 11px; font-weight: 500; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
+  .btn-preview:hover { background: #0066CC; color: white; }
+  .btn-preview.done { background: #F0F0F5; border-color: #C7C7CC; color: #86868B; }
+
+  .card-status { text-align: right; min-width: 90px; }
+  .st-text { font-size: 11px; }
+  .st-text.done { color: #28C840; font-weight: 600; }
+  .st-text.fail { color: #FF3B30; }
+  .st-text.pending { color: #86868B; }
+  .progress { width: 90px; height: 3px; background: #F0F0F5; border-radius: 2px; margin-top: 4px; overflow: hidden; }
+  .progress-bar { height: 100%; background: #0066CC; border-radius: 2px; transition: width 0.3s; }
+  .progress-bar.done { background: #28C840; }
+
+  /* Bottom bar */
+  .bottom { background: #FAFAFA; border-top: 1px solid #F0F0F0; padding: 10px 24px; display: flex; align-items: center; flex-shrink: 0; }
+  .last-upload { font-size: 11px; color: #86868B; }
+
+  .nav-group { display: flex; align-items: center; gap: 8px; margin: 0 auto; }
+  .nav-btn { width: 34px; height: 34px; border-radius: 8px; border: 1px solid #D1D1D6; background: white; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 14px; color: #333; transition: all 0.15s; }
+  .nav-btn:hover { background: #F5F5F7; }
+  .nav-counter { font-size: 13px; color: #333; font-weight: 500; min-width: 70px; text-align: center; }
+
+  .btn-upload { background: #0066CC; color: white; border: none; padding: 9px 20px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+  .btn-upload:hover { background: #0055AA; }
+
+  /* Version */
+  .version { background: #FAFAFA; text-align: center; font-size: 10px; color: #C7C7CC; padding: 4px; flex-shrink: 0; }
+</style>
+</head>
+<body>
+<div class="win">
+
+  <div class="titlebar">
+    <div class="dots"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div>
+    <div class="title">SZU体检报告批量上传+合并应用</div>
+  </div>
+
+  <div class="header">
+    <h1>体检报告批量上传</h1>
+    <div class="badge">今日客户数: 13</div>
+  </div>
+
+  <div class="body">
+
+    <div class="left">
+      <div class="section-title">患者列表</div>
+      <div class="patient-list" style="overflow-y: auto; max-height: 520px;">
+
+        <div class="patient-item active">
+          <div class="avatar">1</div>
+          <div class="info"><div class="name">1111111</div><div class="sub">6 份报告</div></div>
+          <div class="status-dot ok"></div>
+        </div>
+        <div class="patient-item">
+          <div class="avatar">2</div>
+          <div class="info"><div class="name">1918718</div><div class="sub">5 份报告</div></div>
+          <div class="status-dot"></div>
+        </div>
+        <div class="patient-item">
+          <div class="avatar">3</div>
+          <div class="info"><div class="name">2222222</div><div class="sub">5 份报告</div></div>
+          <div class="status-dot"></div>
+        </div>
+        <div class="patient-item">
+          <div class="avatar">4</div>
+          <div class="info"><div class="name">2999999</div><div class="sub">5 份报告</div></div>
+          <div class="status-dot"></div>
+        </div>
+        <div class="patient-item">
+          <div class="avatar">5</div>
+          <div class="info"><div class="name">3333331</div><div class="sub">3 份报告</div></div>
+          <div class="status-dot"></div>
+        </div>
+        <div class="patient-item">
+          <div class="avatar">6</div>
+          <div class="info"><div class="name">3333332</div><div class="sub">3 份报告</div></div>
+          <div class="status-dot"></div>
+        </div>
+        <div class="patient-item">
+          <div class="avatar">7</div>
+          <div class="info"><div class="name">3333333</div><div class="sub">2 份报告</div></div>
+          <div class="status-dot"></div>
+        </div>
+        <div class="patient-item">
+          <div class="avatar">8</div>
+          <div class="info"><div class="name">9999999</div><div class="sub">2 份报告</div></div>
+          <div class="status-dot"></div>
+        </div>
+        <div class="patient-item">
+          <div class="avatar">9</div>
+          <div class="info"><div class="name">2999998</div><div class="sub">1 份报告</div></div>
+          <div class="status-dot"></div>
+        </div>
+        <div class="patient-item">
+          <div class="avatar">10</div>
+          <div class="info"><div class="name">2999997</div><div class="sub">1 份报告</div></div>
+          <div class="status-dot"></div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="right">
+
+      <div class="patient-header">
+        <span class="label">患者</span>
+        <span class="mrn">1111111</span>
+        <span class="label">的报告</span>
+      </div>
+
+      <div class="cards-grid">
+
+        <div class="report-card previewed">
+          <div class="card-thumb">📄</div>
+          <div class="card-info">
+            <div class="card-device">人体成分分析 · 4楼</div>
+            <div class="card-ord">医嘱号: <span class="tag">39379-54</span></div>
+          </div>
+          <div class="card-right">
+            <button class="btn-preview done">已预览</button>
+            <div class="card-status">
+              <div class="st-text done">✓ 已上传</div>
+              <div class="progress"><div class="progress-bar done" style="width:100%"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="report-card">
+          <div class="card-thumb">📄</div>
+          <div class="card-info">
+            <div class="card-device">肺功能</div>
+            <div class="card-ord">医嘱号: <span class="tag">待获取</span></div>
+          </div>
+          <div class="card-right">
+            <button class="btn-preview">预览</button>
+            <div class="card-status">
+              <div class="st-text pending">待上传</div>
+              <div class="progress"><div class="progress-bar" style="width:0%"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="report-card previewed">
+          <div class="card-thumb">📄</div>
+          <div class="card-info">
+            <div class="card-device">肺功能 · 9楼</div>
+            <div class="card-ord">医嘱号: <span class="tag">39379-55</span></div>
+          </div>
+          <div class="card-right">
+            <button class="btn-preview done">已预览</button>
+            <div class="card-status">
+              <div class="st-text done">✓ 已上传</div>
+              <div class="progress"><div class="progress-bar done" style="width:100%"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="report-card">
+          <div class="card-thumb">📄</div>
+          <div class="card-info">
+            <div class="card-device">airdoc</div>
+            <div class="card-ord">医嘱号: <span class="tag">待获取</span></div>
+          </div>
+          <div class="card-right">
+            <button class="btn-preview">预览</button>
+            <div class="card-status">
+              <div class="st-text pending">待上传</div>
+              <div class="progress"><div class="progress-bar" style="width:0%"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="report-card">
+          <div class="card-thumb">📄</div>
+          <div class="card-info">
+            <div class="card-device">动脉硬化检测仪 · 4楼</div>
+            <div class="card-ord">医嘱号: <span class="tag err">ERR_NoHP</span></div>
+          </div>
+          <div class="card-right">
+            <button class="btn-preview">预览</button>
+            <div class="card-status">
+              <div class="st-text fail">✗ 获取失败</div>
+              <div class="progress"><div class="progress-bar" style="width:0%"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Empty slot -->
+        <div></div>
+
+      </div>
+    </div>
+  </div>
+
+  <div class="bottom">
+    <div class="last-upload">今日已上传: 14:32</div>
+    <div class="nav-group">
+      <button class="nav-btn">◀</button>
+      <div class="nav-counter">1 / 13</div>
+      <button class="nav-btn">▶</button>
+    </div>
+    <button class="btn-upload">批量上传到东华 + 合并PDF</button>
+  </div>
+
+  <div class="version">V1.0 developed by Jeffrey Kang</div>
+
+</div>
+</body>
+</html>

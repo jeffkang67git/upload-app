@@ -1,0 +1,50 @@
+单机设备上传：人体成分分析4楼
+虚拟打印机配置参数：https://10.1.9.105:1443/imedical/web/csp/dhcpe.uploadchkresult.csp?URCode=SZU01&CurLocID=343
+
+单机设备上传：人体成分分析9楼
+虚拟打印机配置参数：https://10.1.9.105:1443/imedical/web/csp/dhcpe.uploadchkresult.csp?URCode=SZU02&CurLocID=343
+
+单机设备上传：尿流量3楼
+虚拟打印机配置参数：https://10.1.9.105:1443/imedical/web/csp/dhcpe.uploadchkresult.csp?URCode=SZU03&CurLocID=343
+
+单机设备上传：肺功能
+虚拟打印机配置参数：https://10.1.9.105:1443/imedical/web/csp/dhcpe.uploadchkresult.csp?URCode=SZU04&CurLocID=343
+
+单机设备上传：肺功能9楼
+虚拟打印机配置参数：https://10.1.9.105:1443/imedical/web/csp/dhcpe.uploadchkresult.csp?URCode=SZU05&CurLocID=343
+
+单机设备上传：airdoc
+虚拟打印机配置参数：https://10.1.9.105:1443/imedical/web/csp/dhcpe.uploadchkresult.csp?URCode=SZU06&CurLocID=343
+
+单机设备上传：动脉硬化检测仪
+虚拟打印机配置参数：https://10.1.9.105:1443/imedical/web/csp/dhcpe.uploadchkresult.csp?URCode=SZU07&CurLocID=343
+
+单机设备上传：PAP Smear
+虚拟打印机配置参数：https://10.1.9.105:1443/imedical/web/csp/dhcpe.uploadchkresult.csp?URCode=SZU08&CurLocID=343
+
+单机设备上传：Stool DNA
+虚拟打印机配置参数：https://10.1.9.105:1443/imedical/web/csp/dhcpe.uploadchkresult.csp?URCode=SZU09&CurLocID=343
+
+单机设备上传：循环肿瘤DNA
+虚拟打印机配置参数：https://10.1.9.105:1443/imedical/web/csp/dhcpe.uploadchkresult.csp?URCode=SZU10&CurLocID=343
+
+单机设备上传：脑电图
+虚拟打印机配置参数：https://10.1.9.105:1443/imedical/web/csp/dhcpe.uploadchkresult.csp?URCode=SZU11&CurLocID=343
+
+单机设备上传：遗传性肿瘤
+虚拟打印机配置参数：https://10.1.9.105:1443/imedical/web/csp/dhcpe.uploadchkresult.csp?URCode=SZU12&CurLocID=343
+
+单机设备上传：PAP Smear 4楼护士站
+虚拟打印机配置参数：https://10.1.9.105:1443/imedical/web/csp/dhcpe.uploadchkresult.csp?URCode=SZU13&CurLocID=343
+
+单机设备上传：食物特异性IgG抗体
+虚拟打印机配置参数：https://10.1.9.105:1443/imedical/web/csp/dhcpe.uploadchkresult.csp?URCode=SZU14&CurLocID=343
+
+单机设备上传：Airdoc 4楼
+虚拟打印机配置参数：https://10.1.9.105:1443/imedical/web/csp/dhcpe.uploadchkresult.csp?URCode=SZU15&CurLocID=343
+
+单机设备上传：肝纤维化扫描
+虚拟打印机配置参数：https://10.1.9.105:1443/imedical/web/csp/dhcpe.uploadchkresult.csp?URCode=SZU16&CurLocID=343
+
+单机设备上传：动脉硬化检测仪9F
+虚拟打印机配置参数：https://10.1.9.105:1443/imedical/web/csp/dhcpe.uploadchkresult.csp?URCode=SZU17&CurLocID=343
