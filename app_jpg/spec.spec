@@ -1,5 +1,4 @@
 # -*- mode: python ; coding: utf-8 -*-
-import os, struct
 
 block_cipher = None
 
@@ -9,7 +8,6 @@ a = Analysis(
     binaries=[],
     datas=[
         ('src/*.py', 'src'),
-        ('fonts/*.otf', 'fonts'),
     ],
     hiddenimports=[
         'PyQt5',
@@ -18,10 +16,9 @@ a = Analysis(
         'PyQt5.QtWidgets',
         'ftplib',
         'ssl',
-        'fitz',
+        'fitz',          # PyMuPDF
         'selenium',
         'selenium.webdriver.chrome.options',
-        'selenium.webdriver.chrome.service',
         'webdriver_manager',
         'webbrowser',
     ],
@@ -43,7 +40,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=False,
+    console=False,         # GUI程序，不开黑窗口
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

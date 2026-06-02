@@ -18,17 +18,12 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pyinstaller "PyQt5==5.15.11; platform_system=='Windows'" pymupdf selenium==4.27.1 webdriver-manager
+          pip install pyinstaller pymupdf selenium webdriver-manager PyQt5==5.15.11
 
       - name: Build with PyInstaller
         run: |
           cd app_jpg
           pyinstaller --clean spec.spec
-
-      - name: Copy PyQt5 platforms plugin
-        run: |
-          $p = python -c "import PyQt5,os; print(os.path.dirname(PyQt5.__file__))"
-          Copy-Item -Recurse "$p\Qt\plugins\platforms" -Destination "app_jpg\dist\体检报告上传\"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

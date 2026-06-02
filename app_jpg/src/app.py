@@ -1204,7 +1204,7 @@ class MainWindow(QMainWindow):
         if not self.patients:
             QMessageBox.warning(self, "提示", "没有报告可上传")
             return
-        total = len(self.patients[self.current_idx].reports)
+        total = sum(len(p.reports) for p in self.patients)
         dlg = ConfirmDialog(self.patients[self.current_idx].mrn, total, self)
         if dlg.exec_() != QDialog.Accepted:
             return
