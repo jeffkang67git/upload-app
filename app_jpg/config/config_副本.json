@@ -1,0 +1,26 @@
+{
+  "base_dir": "/Users/jeffreykang/Documents/体检报告上传",
+  "desktop_output": true,
+  "last_user_id": "",
+  "window_width": 1100,
+  "window_height": 750,
+  "devices": [
+    {"name": "人体成分分析4楼", "urcode": "SZU01", "arcim": "6930||1^77||2"},
+    {"name": "人体成分分析9楼", "urcode": "SZU01", "arcim": "6930||1^77||2"},
+    {"name": "尿流量3楼", "urcode": "SZU03", "arcim": ""},
+    {"name": "肺功能", "urcode": "SZU04", "arcim": "592||1"},
+    {"name": "肺功能9楼", "urcode": "SZU04", "arcim": "592||1"},
+    {"name": "airdoc", "urcode": "SZU06", "arcim": "8249||1^304||1"},
+    {"name": "Airdoc 4楼", "urcode": "SZU06", "arcim": "8249||1^304||1"},
+    {"name": "动脉硬化检测仪", "urcode": "SZU07", "arcim": "7970||1"},
+    {"name": "动脉硬化检测仪9F", "urcode": "SZU07", "arcim": "7970||1"},
+    {"name": "PAP Smear", "urcode": "SZU08", "arcim": ""},
+    {"name": "PAP Smear 4楼护士站", "urcode": "SZU08", "arcim": ""},
+    {"name": "Stool DNA", "urcode": "SZU09", "arcim": ""},
+    {"name": "循环肿瘤DNA", "urcode": "SZU10", "arcim": ""},
+    {"name": "脑电图", "urcode": "SZU11", "arcim": ""},
+    {"name": "遗传性肿瘤", "urcode": "SZU12", "arcim": ""},
+    {"name": "食物特异性IgG抗体", "urcode": "SZU14", "arcim": ""},
+    {"name": "肝纤维化扫描", "urcode": "SZU16", "arcim": "35791||1"}
+  ]
+}

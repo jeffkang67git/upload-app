@@ -17,9 +17,10 @@ a = Analysis(
         'PyQt5.QtWidgets',
         'ftplib',
         'ssl',
-        'fitz',          # PyMuPDF
+        'fitz',
         'selenium',
         'selenium.webdriver.chrome.options',
+        'selenium.webdriver.chrome.service',
         'webdriver_manager',
         'webbrowser',
     ],
