@@ -1815,10 +1815,11 @@ class SingleReportWorker(QThread):
             page = doc[page_num]
             mat = fitz.Matrix(2.0, 2.0)
             pix = page.get_pixmap(matrix=mat, alpha=False)
-            tmp = tempfile.NamedTemporaryFile(suffix=f"_p{page_num}.jpg", delete=False)
-            pix.save(tmp.name)
-            tmp.close()
-            jpg_paths.append(tmp.name)
+            data = pix.tobytes()
+            jpg_path = tempfile.mktemp(suffix=f"_p{page_num}.jpg")
+            with open(jpg_path, "wb") as f:
+                f.write(data)
+            jpg_paths.append(jpg_path)
         doc.close()
         if not jpg_paths:
             raise RuntimeError("无可上传页")
