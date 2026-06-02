@@ -1677,6 +1677,14 @@ class SingleReportWorker(QThread):
     report_done = pyqtSignal(str, object, object, str)  # (mrn, rep, success_or_None, err)
     finished = pyqtSignal(str, object)  # (mrn, rep)
 
+    def _quit_driver(self):
+        if self.driver:
+            try:
+                self.driver.quit()
+            except Exception:
+                pass
+            self.driver = None
+
     def __init__(self, patient, rep, user_id, user_orditem_id=None, parent=None):
         super().__init__(parent)
         self.patient = patient
@@ -1719,7 +1727,7 @@ class SingleReportWorker(QThread):
             rep.status = "fail"
             rep.ord_no = f"ERR:{e}"
             self.report_done.emit(mrn, rep, False, str(e))
-            self.driver = None
+            self._quit_driver()
             self.finished.emit(mrn, rep)
             return
 
@@ -1766,7 +1774,7 @@ class SingleReportWorker(QThread):
                 rep.status = "fail"
                 self.report_done.emit(mrn, rep, False, str(e))
                 log_append(mrn, rep.device_name, self.user_id, "ord_fail", str(e))
-                self.driver = None
+                self._quit_driver()
                 self.finished.emit(mrn, rep)
                 return
 
@@ -1799,7 +1807,7 @@ class SingleReportWorker(QThread):
             self.report_done.emit(mrn, rep, False, str(e))
             log_append(mrn, rep.device_name, self.user_id, "upload_fail", str(e))
 
-        self.driver = None
+        self._quit_driver()
         self.finished.emit(mrn, rep)
 
     def _upload_single(self, report):
