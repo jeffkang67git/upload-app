@@ -19,6 +19,7 @@ a = Analysis(
         'fitz',          # PyMuPDF
         'selenium',
         'selenium.webdriver.chrome.options',
+        'selenium.webdriver.chrome.webdriver',
         'webdriver_manager',
         'webbrowser',
     ],
