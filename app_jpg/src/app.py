@@ -23,7 +23,7 @@ from PyQt5.QtWidgets import (
     QDialogButtonBox, QFileDialog, QSizePolicy, QTableWidget,
     QTableWidgetItem, QAbstractItemView
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QEvent
 from PyQt5.QtGui import QFont, QPalette, QBrush, QColor
 
 from src.config_manager import ConfigManager
@@ -208,6 +208,49 @@ def log_append(mrn, device, user_id, status, extra=""):
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         })
         log_path.write_text(json.dumps(logs, ensure_ascii=False))
+    except Exception:
+        pass
+
+# ============================================================
+# 每日上传记录（仅记录当日成功上传）
+# ============================================================
+_daily_uploads = {}  # {(mrn, device_name): {"ord_no": ..., "user_id": ..., "time": ...}}
+
+def _load_today_uploads():
+    """启动时加载今日上传记录"""
+    global _daily_uploads
+    try:
+        from pathlib import Path
+        today = datetime.now().strftime("%Y-%m-%d")
+        log_path = Path(__file__).parent.parent / f"uploads_{today}.json"
+        if log_path.exists():
+            data = json.loads(log_path.read_text())
+            for rec in data.get("records", []):
+                key = (rec.get("mrn", ""), rec.get("device", ""))
+                _daily_uploads[key] = rec
+    except Exception:
+        pass
+
+def _save_today_upload(mrn, device, ord_no, user_id):
+    """上传成功后写入当日记录"""
+    try:
+        from pathlib import Path
+        today = datetime.now().strftime("%Y-%m-%d")
+        log_path = Path(__file__).parent.parent / f"uploads_{today}.json"
+        try:
+            data = json.loads(log_path.read_text()) if log_path.exists() else {"records": []}
+        except Exception:
+            data = {"records": []}
+        # 覆盖同一患者+同一设备的记录
+        key = (mrn, device)
+        new_rec = {"mrn": mrn, "device": device, "ord_no": ord_no,
+                   "user_id": user_id, "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+        # 移除旧的同key记录
+        data["records"] = [r for r in data.get("records", [])
+                          if (r.get("mrn"), r.get("device")) != key]
+        data["records"].append(new_rec)
+        log_path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+        _daily_uploads[key] = new_rec
     except Exception:
         pass
 
@@ -588,6 +631,7 @@ class MainWindow(QMainWindow):
 
         # 应用启动后自动扫描一次
         QTimer.singleShot(200, self.start_scan)
+        _load_today_uploads()
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -631,6 +675,7 @@ class MainWindow(QMainWindow):
             QListWidget::item:hover { background: #F0F0F5; }
         """)
         self.patient_list.itemClicked.connect(self._on_patient_clicked)
+        self.patient_list.installEventFilter(self)
         ll.addWidget(self.patient_list)
 
         tl.addWidget(left)
@@ -749,6 +794,36 @@ class MainWindow(QMainWindow):
     def _on_scan_finished(self, patients):
         if self._destroyed:
             return
+
+        # 补充：今日日志里有上传记录但文件已删除的患者
+        existing_mrns = {p.mrn for p in patients}
+        for (mrn, device), rec in _daily_uploads.items():
+            rr = ReportRecord.__new__(ReportRecord)
+            rr.pdf_path = Path("")
+            rr.device_name = rec.get("device", device)
+            rr.ord_no = rec.get("ord_no")
+            rr.arcim = None
+            rr.arcim_sub = None
+            rr.urcode = None
+            rr.status = 'done'
+            rr.progress = 100
+            rr.error_msg = ''
+            rr.log = []
+            rr.ord_status = 'found'
+            if mrn in existing_mrns:
+                # 合并到已有患者
+                for p in patients:
+                    if p.mrn == mrn:
+                        p.reports.append(rr)
+                        break
+            else:
+                # 新建患者
+                patient = PatientRecord(mrn)
+                patient.reports.append(rr)
+                patients.append(patient)
+                existing_mrns.add(mrn)
+
+        patients = sorted(patients, key=lambda p: p.mrn)
         self.patients = patients
         self.statusBar().showMessage(f"共 {len(patients)} 位患者，已扫描完成")
         try:
@@ -759,6 +834,43 @@ class MainWindow(QMainWindow):
                 self._show_patient(0)
         except RuntimeError:
             pass
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        if key == Qt.Key_Up:
+            if self.current_idx > 0:
+                self.current_idx -= 1
+                self.current_page = 0
+                self._navigate_to_patient(self.current_idx)
+        elif key == Qt.Key_Down:
+            if self.current_idx + 1 < len(self.patients):
+                self.current_idx += 1
+                self.current_page = 0
+                self._navigate_to_patient(self.current_idx)
+        else:
+            super().keyPressEvent(event)
+
+    def eventFilter(self, obj, event):
+        if obj is self.patient_list and event.type() == QEvent.KeyPress:
+            key = event.key()
+            if key == Qt.Key_Up:
+                if self.current_idx > 0:
+                    self.current_idx -= 1
+                    self.current_page = 0
+                    self._navigate_to_patient(self.current_idx)
+                return True
+            elif key == Qt.Key_Down:
+                if self.current_idx + 1 < len(self.patients):
+                    self.current_idx += 1
+                    self.current_page = 0
+                    self._navigate_to_patient(self.current_idx)
+                return True
+        return super().eventFilter(obj, event)
+
+    def _navigate_to_patient(self, idx):
+        """上下键切换患者：选中列表行 + 显示卡片"""
+        self.patient_list.setCurrentRow(idx)
+        self._show_patient(idx)
 
     def _refresh_patient_list(self):
         try:
@@ -776,20 +888,29 @@ class MainWindow(QMainWindow):
         w.setFixedHeight(52)
         w.setStyleSheet("background: transparent;")
         l = QHBoxLayout(w)
-        l.setContentsMargins(14, 0, 14, 0)
+        l.setContentsMargins(14, 0, 36, 0)
         l.setSpacing(8)
 
         lbl = QLabel(patient.mrn)
         lbl.setStyleSheet("font-size: 13px; color: #1D1D1F; font-weight: 500;")
         lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         l.addWidget(lbl)
+
+        spacer = QWidget()
+        spacer.setFixedWidth(8)
+        l.addWidget(spacer)
         l.addStretch()
 
         st = patient.aggregate_status
+        # 如果所有报告都有今日上传记录（跨会话持久化），视为已完成
+        all_done_today = all(
+            (patient.mrn, rep.device_name) in _daily_uploads
+            for rep in patient.reports
+        )
         dot = QLabel()
         dot.setFixedSize(8, 8)
         dot.setStyleSheet(
-            "background: #34C759; border-radius: 4px;" if st == "done" else
+            "background: #34C759; border-radius: 4px;" if (st == "done" or all_done_today) else
             "background: #FF9500; border-radius: 4px;" if st == "uploading" else
             "background: #FF3B30; border-radius: 4px;" if st == "fail" else
             "background: #C7C7CC; border-radius: 4px;"
@@ -832,7 +953,7 @@ class MainWindow(QMainWindow):
             if self.current_page >= total_pages:
                 self.current_page = 0
             self._render_cards()
-            self._update_page_nav(total_pages)
+            self._update_page_nav()
             self.patient_hdr.setText(f"患者: {patient.mrn}  ({len(patient.reports)}份报告)")
             # Highlight selected patient
             for i in range(self.patient_list.count()):
@@ -842,14 +963,23 @@ class MainWindow(QMainWindow):
             print(f"[_show_patient] RuntimeError: {e}")
             pass
 
-    def _update_page_nav(self, total_pages):
+    def _update_page_nav(self):
         if self._destroyed:
             return
         try:
-            self.btn_prev.setEnabled(self.current_page > 0)
-            self.btn_next.setEnabled(self.current_page < total_pages - 1)
-            if total_pages > 0:
-                self.lbl_page.setText(f"{self.current_page + 1} / {total_pages}")
+            patient = self.patients[self.current_idx]
+            total_cards = len(patient.reports)
+            card_page = self.current_page
+            card_total = max(1, (total_cards + CARDS_PER_PAGE - 1) // CARDS_PER_PAGE)
+            total_patients = len(self.patients)
+
+            # 跨患者翻页：prev 在第一张卡片页且有上一个患者时也能点
+            self.btn_prev.setEnabled(card_page > 0 or self.current_idx > 0)
+            # 跨患者翻页：next 在最后一张卡片页且有下一个患者时也能点
+            self.btn_next.setEnabled(card_page < card_total - 1 or self.current_idx + 1 < total_patients)
+
+            if total_patients > 0:
+                self.lbl_page.setText(f"{self.current_idx + 1}/{total_patients}")
             else:
                 self.lbl_page.setText("")
         except RuntimeError:
@@ -893,6 +1023,7 @@ class MainWindow(QMainWindow):
             return
         patient = self.patients[self.current_idx]
         reports = patient.reports
+        mrn = patient.mrn
 
         while self.cards_grid.count():
             child = self.cards_grid.takeAt(0)
@@ -957,6 +1088,14 @@ class MainWindow(QMainWindow):
                     ol = QLabel("医嘱号: 待获取")
                     ol.setStyleSheet("font-size: 11px; color: #86868B; padding: 0px;")
                 mid.addWidget(ol)
+
+                # 今日上传信息
+                key = (mrn, rep.device_name)
+                info = _daily_uploads.get(key)
+                if info:
+                    il = QLabel(f"今日 {info['time'][11:]} {info['user_id']} {info['ord_no']}")
+                    il.setStyleSheet("font-size: 10px; color: #34C759; padding: 0px;")
+                    mid.addWidget(il)
 
                 # Let mid stretch to fill remaining space (stays top-aligned)
                 mid.addStretch()
@@ -1645,6 +1784,7 @@ class SingleReportWorker(QThread):
             self.progress.emit(rep.ord_no, 100)
             self.report_done.emit(mrn, rep, True, "")
             log_append(mrn, rep.device_name, self.user_id, "uploaded", rep.ord_no)
+            _save_today_upload(mrn, rep.device_name, rep.ord_no, self.user_id)
         except Exception as e:
             rep.status = "fail"
             rep.error_msg = str(e)
@@ -1686,6 +1826,11 @@ class SingleReportWorker(QThread):
             _do_ftps_upload_single(report.ord_no, jpg_path, remote_name)
             os.unlink(jpg_path)
             self.progress.emit(report.ord_no, int(30 + (i + 1) / len(jpg_paths) * 50))
+        # 所有jpg上传成功后删除原PDF
+        try:
+            os.unlink(pdf_path)
+        except Exception:
+            pass
         return len(jpg_paths)
 
 
