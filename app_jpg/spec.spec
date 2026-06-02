@@ -30,6 +30,11 @@ a = Analysis(
     noarchive=False,
 )
 
+# 收集 PyQt5 所有子模块（确保 platforms/ 目录被打包）
+from PyInstaller.utils.hooks import collect_all_submodules, collect_data_files
+for _mod in ['PyQt5', 'PyQt5.Qt', 'PyQt5.QtCore', 'PyQt5.QtGui', 'PyQt5.QtWidgets']:
+    a.datas += collect_data_files(_mod)
+
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
@@ -41,7 +46,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -55,7 +60,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name='体检报告上传',
 )
