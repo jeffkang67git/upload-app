@@ -1,4 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_data_files
 
 block_cipher = None
 
@@ -30,10 +31,8 @@ a = Analysis(
     noarchive=False,
 )
 
-# 收集 PyQt5 所有子模块（确保 platforms/ 目录被打包）
-from PyInstaller.utils.hooks import collect_all_submodules, collect_data_files
-for _mod in ['PyQt5', 'PyQt5.Qt', 'PyQt5.QtCore', 'PyQt5.QtGui', 'PyQt5.QtWidgets']:
-    a.datas += collect_data_files(_mod)
+# 收集 PyQt5 全部数据文件（含 platforms/ 目录）
+a.datas += collect_data_files('PyQt5')
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
