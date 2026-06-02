@@ -58,7 +58,10 @@ def _make_chrome_driver():
     opts.add_argument("--allow-insecure-localhost")
     prefs = {"download.prompt_for_behavior": False}
     opts.add_experimental_option("prefs", prefs)
-    return webdriver.Chrome(options=opts)
+    driver = webdriver.Chrome(options=opts)
+    driver.set_page_load_timeout(30)
+    driver.set_script_timeout(30)
+    return driver
 
 def _get_user_id(driver, user_id, loc, arcim):
     driver.get(CSP_PAGE_TPL.format(urcode="SZU06"))
