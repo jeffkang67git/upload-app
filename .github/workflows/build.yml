@@ -23,7 +23,12 @@ jobs:
       - name: Build with PyInstaller
         run: |
           cd app_jpg
-          pyinstaller --clean --collect-all PyQt5 spec.spec
+          pyinstaller --clean spec.spec
+
+      - name: Copy PyQt5 platforms plugin
+        run: |
+          $p = python -c "import PyQt5,os; print(os.path.dirname(PyQt5.__file__))"
+          Copy-Item -Recurse "$p\Qt\plugins\platforms" -Destination "app_jpg\dist\体检报告上传\"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
