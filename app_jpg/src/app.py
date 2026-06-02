@@ -23,11 +23,8 @@ from PyQt5.QtWidgets import (
     QDialogButtonBox, QFileDialog, QSizePolicy, QTableWidget,
     QTableWidgetItem, QAbstractItemView
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QEvent
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QEvent, QUrl, QDesktopServices
 from PyQt5.QtGui import QFont, QPalette, QBrush, QColor
-from PyQt5.QtWidgets import QDesktopServices
-from PyQt5.QtCore import QUrl
-
 from src.config_manager import ConfigManager
 
 CARDS_PER_PAGE = 6
