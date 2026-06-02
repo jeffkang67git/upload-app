@@ -50,17 +50,21 @@ def _make_chrome_driver():
     from selenium.webdriver.chrome.options import Options as ChromeOptions
     from selenium import webdriver
     opts = ChromeOptions()
-    opts.add_argument("--headless")
+    opts.add_argument("--headless=new")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-gpu")
     opts.add_argument("--ignore-certificate-errors")
     opts.add_argument("--allow-insecure-localhost")
+    opts.add_argument("--disable-extensions")
+    opts.add_argument("--disable-features=TranslateUI")
+    opts.add_argument("--window-size=1920,1080")
+    opts.add_argument("--log-level=3")
     prefs = {"download.prompt_for_behavior": False}
     opts.add_experimental_option("prefs", prefs)
     driver = webdriver.Chrome(options=opts)
-    driver.set_page_load_timeout(30)
-    driver.set_script_timeout(30)
+    driver.set_page_load_timeout(60)
+    driver.set_script_timeout(60)
     return driver
 
 def _get_user_id(driver, user_id, loc, arcim):
