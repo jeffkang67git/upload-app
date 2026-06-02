@@ -140,22 +140,19 @@ def _do_ftps_clear_folder(ord_no):
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
-    try:
-        ftps = ftplib.FTP_TLS(context=ctx)
-        ftps.connect(FTP_CONFIG["host"], FTP_CONFIG["port"], timeout=8)
-        ftps.login(FTP_CONFIG["username"], FTP_CONFIG["password"])
-        ftps.prot_p()
-        _ensure_ftp_dir(ftps, "dhcpeftp", "images", str(ord_no))
-        files = ftps.nlst()
-        for f in files:
-            if f not in ('.', '..'):
-                try:
-                    ftps.voidcmd(f"DELE {f}")
-                except Exception:
-                    pass
-        ftps.quit()
-    except Exception:
-        pass
+    ftps = ftplib.FTP_TLS(context=ctx)
+    ftps.connect(FTP_CONFIG["host"], FTP_CONFIG["port"], timeout=8)
+    ftps.login(FTP_CONFIG["username"], FTP_CONFIG["password"])
+    ftps.prot_p()
+    _ensure_ftp_dir(ftps, "dhcpeftp", "images", str(ord_no))
+    files = ftps.nlst()
+    for f in files:
+        if f not in ('.', '..'):
+            try:
+                ftps.voidcmd(f"DELE {f}")
+            except Exception:
+                pass
+    ftps.quit()
 
 def _do_ftps_upload_single(ord_no, local_file, remote_name):
     """FTP上传单个文件（二进制 STOR），不清空目录"""
