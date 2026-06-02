@@ -25,6 +25,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QEvent
 from PyQt5.QtGui import QFont, QPalette, QBrush, QColor
+from PyQt5.QtWidgets import QDesktopServices
+from PyQt5.QtCore import QUrl
 
 from src.config_manager import ConfigManager
 
@@ -47,8 +49,9 @@ DEVICE_LIST = [
 ]
 
 def _make_chrome_driver():
+    from selenium.webdriver.chrome.options import Options as ChromeOptions
     from selenium import webdriver
-    opts = webdriver.ChromeOptions()
+    opts = ChromeOptions()
     opts.add_argument("--headless")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
@@ -1157,7 +1160,8 @@ class MainWindow(QMainWindow):
             self.cards_grid.addWidget(card, i // 2, i % 2)
 
     def _on_preview(self, rep):
-        subprocess.run(["open", str(rep.pdf_path)])
+        url = QUrl.fromLocalFile(str(rep.pdf_path))
+        QDesktopServices.openUrl(url)
         if rep.status != 'done':
             rep.status = 'previewed'
         self._render_cards()
@@ -1202,7 +1206,7 @@ class MainWindow(QMainWindow):
         if not self.patients:
             QMessageBox.warning(self, "提示", "没有报告可上传")
             return
-        total = sum(len(p.reports) for p in self.patients)
+        total = len(self.patients[self.current_idx].reports)
         dlg = ConfirmDialog(self.patients[self.current_idx].mrn, total, self)
         if dlg.exec_() != QDialog.Accepted:
             return
