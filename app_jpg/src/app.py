@@ -23,7 +23,7 @@ from PyQt5.QtWidgets import (
     QDialogButtonBox, QFileDialog, QSizePolicy, QTableWidget,
     QTableWidgetItem, QAbstractItemView
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QEvent, QUrl, QDesktopServices
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QEvent, QUrl
 from PyQt5.QtGui import QFont, QPalette, QBrush, QColor
 from src.config_manager import ConfigManager
 
@@ -1157,8 +1157,8 @@ class MainWindow(QMainWindow):
             self.cards_grid.addWidget(card, i // 2, i % 2)
 
     def _on_preview(self, rep):
-        url = QUrl.fromLocalFile(str(rep.pdf_path))
-        QDesktopServices.openUrl(url)
+        import webbrowser
+        webbrowser.open(str(rep.pdf_path))
         if rep.status != 'done':
             rep.status = 'previewed'
         self._render_cards()

@@ -8,6 +8,7 @@ a = Analysis(
     binaries=[],
     datas=[
         ('src/*.py', 'src'),
+        ('fonts/*.otf', 'fonts'),
     ],
     hiddenimports=[
         'PyQt5',
@@ -18,7 +19,9 @@ a = Analysis(
         'ssl',
         'fitz',          # PyMuPDF
         'selenium',
+        'selenium.webdriver.chrome.options',
         'webdriver_manager',
+        'webbrowser',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -38,7 +41,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,         # GUI程序，不开黑窗口
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
