@@ -119,6 +119,18 @@ def _save_result(driver, mrn, user_id, arcim_main, arcim_sub, cur_loc_id="343"):
         raise RuntimeError(result)
     return result.strip()
 
+def _ensure_ftp_dir(ftps, *parts):
+    """逐段创建并切换FTP目录，parts为"dhcpeftp","images","{ord_no}"等"""
+    for seg in parts:
+        try:
+            ftps.cwd(seg)
+        except ftplib.error_perm:
+            try:
+                ftps.mkd(seg)
+                ftps.cwd(seg)
+            except Exception:
+                pass
+
 def _do_ftps_clear_folder(ord_no):
     """清空 FTP 服务器上 dhcpeftp/images/{ord_no}/ 目录下的所有文件"""
     ctx = ssl.create_default_context()
@@ -129,9 +141,7 @@ def _do_ftps_clear_folder(ord_no):
         ftps.connect(FTP_CONFIG["host"], FTP_CONFIG["port"], timeout=8)
         ftps.login(FTP_CONFIG["username"], FTP_CONFIG["password"])
         ftps.prot_p()
-        ftps.cwd("dhcpeftp")
-        ftps.cwd("images")
-        ftps.cwd(str(ord_no))
+        _ensure_ftp_dir(ftps, "dhcpeftp", "images", str(ord_no))
         files = ftps.nlst()
         for f in files:
             if f not in ('.', '..'):
@@ -152,9 +162,7 @@ def _do_ftps_upload_single(ord_no, local_file, remote_name):
     ftps.connect(FTP_CONFIG["host"], FTP_CONFIG["port"], timeout=8)
     ftps.login(FTP_CONFIG["username"], FTP_CONFIG["password"])
     ftps.prot_p()
-    ftps.cwd("dhcpeftp")
-    ftps.cwd("images")
-    ftps.cwd(str(ord_no))
+    _ensure_ftp_dir(ftps, "dhcpeftp", "images", str(ord_no))
     with open(local_file, "rb") as fp:
         ftps.storbinary(f"STOR {remote_name}", fp)
     ftps.quit()
@@ -169,9 +177,7 @@ def _do_ftps_clear_and_upload(ord_no, local_file, remote_name):
     ftps.connect(FTP_CONFIG["host"], FTP_CONFIG["port"], timeout=8)
     ftps.login(FTP_CONFIG["username"], FTP_CONFIG["password"])
     ftps.prot_p()
-    ftps.cwd("dhcpeftp")
-    ftps.cwd("images")
-    ftps.cwd(str(ord_no))
+    _ensure_ftp_dir(ftps, "dhcpeftp", "images", str(ord_no))
     # 清空已有文件
     try:
         files = ftps.nlst()
