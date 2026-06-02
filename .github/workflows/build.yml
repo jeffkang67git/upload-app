@@ -23,7 +23,7 @@ jobs:
       - name: Build with PyInstaller
         run: |
           cd app_jpg
-          pyinstaller --clean spec.spec
+          pyinstaller --clean --collect-all PyQt5 spec.spec
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

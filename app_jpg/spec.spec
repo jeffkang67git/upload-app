@@ -1,5 +1,4 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_data_files
 
 block_cipher = None
 
@@ -30,9 +29,6 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
-
-# 收集 PyQt5 全部数据文件（含 platforms/ 目录）
-a.datas += collect_data_files('PyQt5')
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
