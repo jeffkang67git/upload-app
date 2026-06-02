@@ -1,6 +1,10 @@
 import sys
 import os
 os.environ.setdefault('QT_LOGGING_RULES', '*.debug=false')
+
+# 禁用硬件加速，防止显卡驱动崩溃（PyInstaller 打包常见问题）
+os.environ.setdefault('QT_OPENGL', 'software')
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PyQt5.QtWidgets import QApplication
