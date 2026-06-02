@@ -1830,7 +1830,10 @@ class SingleReportWorker(QThread):
                 _do_ftps_clear_folder(report.ord_no)
                 cleared = True
             _do_ftps_upload_single(report.ord_no, jpg_path, remote_name)
-            os.unlink(jpg_path)
+            try:
+                os.unlink(jpg_path)
+            except OSError:
+                pass  # Windows 文件句柄可能未释放，临时文件由系统清理
             self.progress.emit(report.ord_no, int(30 + (i + 1) / len(jpg_paths) * 50))
         # 所有jpg上传成功后删除原PDF
         try:
