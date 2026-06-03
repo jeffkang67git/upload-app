@@ -1253,12 +1253,28 @@ class MainWindow(QMainWindow):
         self._render_cards()
 
     def _on_ord_fetch_done(self, mrn, user_id_input):
-        """ord_fetch 完成后，开始上传流程"""
+        """ord_fetch 完成后，启动 PDF→JPG 后台转换，完成后开始上传流程"""
         if hasattr(self, '_ord_fetch_timer'):
             self._ord_fetch_timer.stop()
-        driver = self._ord_fetch_worker.driver if self._ord_fetch_worker else None
         self._ord_fetch_worker = None
+
+        # 启动所有报告的 PDF→JPG 后台转换（并行）
+        current = self.patients[self.current_idx] if 0 <= self.current_idx < len(self.patients) else None
+        if current:
+            for rep in current.reports:
+                if rep.urcode and rep.status != "cancel":
+                    rep.jpg_ready = False
+                    rep.jpg_paths = None
+                    conv = PdfConvertWorker(rep)
+                    conv.converted.connect(self._on_jpg_convert_done)
+                    conv.start()
+
         self._do_upload(user_id_input)
+
+    def _on_jpg_convert_done(self, rep, jpg_paths):
+        """JPG 转换完成后更新 rep（屏障信号）"""
+        rep.jpg_paths = jpg_paths
+        rep.jpg_ready = True
 
     def _do_upload(self, user_id_input):
         """启动并行上传：每报告独立worker，签名后显示进度遮罩"""
@@ -1609,6 +1625,8 @@ class ReportRecord:
         self.progress = 0         # 0~100
         self.error_msg = ''
         self.ord_status = ''      # fetching | found | error | ''
+        self.jpg_paths = None     # 签名时后台转换的JPG路径列表
+        self.jpg_ready = False    # JPG转换是否已完成
         self._resolve_device()
 
     def _resolve_device(self):
@@ -1683,7 +1701,7 @@ class SingleReportWorker(QThread):
                 self.driver.quit()
             except Exception:
                 pass
-            self.driver = None
+        self.driver = None
 
     def __init__(self, patient, rep, user_id, user_orditem_id=None, parent=None):
         super().__init__(parent)
@@ -1700,6 +1718,27 @@ class SingleReportWorker(QThread):
     def run(self):
         mrn = self.patient.mrn
         rep = self.rep
+
+        # 等待 JPG 转换完成（ord_fetch 已完成后，签名后台并行转换的 JPG）
+        for _ in range(300):  # 最多等 30s
+            if rep.jpg_ready:
+                break
+            import time as _t
+            _t.sleep(0.1)
+        else:
+            log_append(mrn, rep.device_name, self.user_id, "upload_fail", "JPG转换超时")
+            rep.status = "fail"
+            rep.error_msg = "JPG转换超时"
+            self.finished.emit(mrn, rep)
+            return
+
+        jpg_paths = rep.jpg_paths
+        if not jpg_paths:
+            log_append(mrn, rep.device_name, self.user_id, "upload_fail", "无JPG文件")
+            rep.status = "fail"
+            rep.error_msg = "无JPG文件"
+            self.finished.emit(mrn, rep)
+            return
 
         # 创建独立浏览器
         try:
@@ -1815,35 +1854,95 @@ class SingleReportWorker(QThread):
             doc = fitz.open(pdf_path)
         except Exception as e:
             raise RuntimeError(f"PDF打开失败: {e}")
-        jpg_paths = []
-        for page_num in range(len(doc)):
-            page = doc[page_num]
-            mat = fitz.Matrix(2.0, 2.0)
-            pix = page.get_pixmap(matrix=mat, alpha=False)
-            data = pix.tobytes()
-            jpg_path = tempfile.mktemp(suffix=f"_p{page_num}.jpg")
-            with open(jpg_path, "wb") as f:
-                f.write(data)
-            jpg_paths.append(jpg_path)
-        doc.close()
+        jpg_paths = rep.jpg_paths  # 签名时后台已转换
         if not jpg_paths:
-            raise RuntimeError("无可上传页")
-        cleared = False
-        for i, jpg_path in enumerate(jpg_paths):
-            remote_name = f"{report.ord_no}_{i}.jpg"
-            # 第一张JPG：先检测并清空已有文件，再上传
-            if not cleared:
-                _do_ftps_clear_folder(report.ord_no)
-                cleared = True
-            _do_ftps_upload_single(report.ord_no, jpg_path, remote_name)
-            # 临时JPG不删除，由系统Temp目录定期清理
-            self.progress.emit(report.ord_no, int(30 + (i + 1) / len(jpg_paths) * 50))
+            log_append(mrn, rep.device_name, self.user_id, "upload_fail", "无JPG文件")
+            rep.status = "fail"
+            rep.error_msg = "无JPG文件"
+            self.finished.emit(mrn, rep)
+            return
+
+        # FTP长连接：一次登录，上传所有页 + 重命名
+        try:
+            self._ftps_upload_all(report, jpg_paths)
+        except Exception as e:
+            log_append(mrn, rep.device_name, self.user_id, "upload_fail", str(e))
+            rep.status = "fail"
+            rep.error_msg = str(e)
+            rep.progress = 0
+            self.progress.emit(rep.ord_no, 0)
+            self.report_done.emit(mrn, rep, False, str(e))
+            self.finished.emit(mrn, rep)
+            return
+
         # 所有jpg上传成功后删除原PDF
         try:
-            os.unlink(pdf_path)
+            os.unlink(str(report.pdf_path))
         except Exception:
             pass
-        return len(jpg_paths)
+
+        self.finished.emit(mrn, rep)
+
+    def _ftps_upload_all(self, report, jpg_paths):
+        """FTP长连接：一次login上传所有页，包含目录重名检测"""
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        ftps = ftplib.FTP_TLS(context=ctx)
+        ftps.connect(FTP_CONFIG["host"], FTP_CONFIG["port"], timeout=8)
+        ftps.login(FTP_CONFIG["username"], FTP_CONFIG["password"])
+        ftps.prot_p()
+        _ensure_ftp_dir(ftps, "dhcpeftp", "images", str(report.ord_no))
+
+        # 重名检测：NLST → DELE 清空目录
+        try:
+            for f in ftps.nlst():
+                if f not in ('.', '..'):
+                    try:
+                        ftps.voidcmd(f"DELE {f}")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # 上传所有 JPG（长连接内）
+        for i, jpg_path in enumerate(jpg_paths):
+            final_name = f"{report.ord_no}_{i}.jpg"
+            with open(jpg_path, "rb") as fp:
+                ftps.storbinary(f"STOR {final_name}", fp)
+            self.progress.emit(report.ord_no, int(30 + (i + 1) / len(jpg_paths) * 50))
+
+        ftps.quit()
+
+
+class PdfConvertWorker(QThread):
+    """后台PDF→JPG转换线程，每报告一个，互不阻塞"""
+    converted = pyqtSignal(object, list)  # (rep, jpg_paths)
+
+    def __init__(self, rep, parent=None):
+        super().__init__(parent)
+        self.rep = rep
+
+    def run(self):
+        rep = self.rep
+        jpg_paths = []
+        try:
+            doc = fitz.open(str(rep.pdf_path))
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                mat = fitz.Matrix(2.0, 2.0)
+                pix = page.get_pixmap(matrix=mat, alpha=False)
+                data = pix.tobytes()
+                jpg_path = tempfile.mktemp(suffix=f"_p{page_num}.jpg")
+                with open(jpg_path, "wb") as f:
+                    f.write(data)
+                jpg_paths.append(jpg_path)
+            doc.close()
+        except Exception:
+            pass
+        rep.jpg_paths = jpg_paths
+        rep.jpg_ready = True
+        self.converted.emit(rep, jpg_paths)
 
 
 class UploadWorker(QThread):
