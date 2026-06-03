@@ -1387,9 +1387,7 @@ class MainWindow(QMainWindow):
         self.lbl_last_upload.setText(f"今日已上传: {datetime.now().strftime('%H:%M')}")
         self.statusBar().showMessage(f"患者 {mrn} 上传完成")
 
-        # 3. worker引用延迟清理（避免在Qt信号处理中触发GC）
-        if mrn in self._upload_workers:
-            self._upload_workers.pop(mrn)
+        # worker引用由closeEvent统一清理，不在此处触发GC
 
     def _merge_to_desktop(self, user_id):
         output_dir = self.config.get('desktop_output_dir', '')
@@ -1700,10 +1698,6 @@ class SingleReportWorker(QThread):
     report_done = pyqtSignal(str, object, object, str)  # (mrn, rep, success_or_None, err)
     finished = pyqtSignal(str, object)  # (mrn, rep)
 
-    def _quit_driver(self):
-        # 不在worker线程调用 driver.quit()——Windows Selenium跨线程quit硬崩溃
-        self.driver = None
-
     def __init__(self, patient, rep, user_id, user_orditem_id=None, parent=None):
         super().__init__(parent)
         self.patient = patient
@@ -1729,7 +1723,6 @@ class SingleReportWorker(QThread):
             rep.status = "fail"
             rep.ord_no = f"ERR:{e}"
             self.report_done.emit(mrn, rep, False, str(e))
-            self._quit_driver()
             self.finished.emit(mrn, rep)
             return
 
@@ -1747,7 +1740,6 @@ class SingleReportWorker(QThread):
             rep.status = "fail"
             rep.ord_no = f"ERR:{e}"
             self.report_done.emit(mrn, rep, False, str(e))
-            self._quit_driver()
             self.finished.emit(mrn, rep)
             return
 
@@ -1794,7 +1786,6 @@ class SingleReportWorker(QThread):
                 rep.status = "fail"
                 self.report_done.emit(mrn, rep, False, str(e))
                 log_append(mrn, rep.device_name, self.user_id, "ord_fail", str(e))
-                self._quit_driver()
                 self.finished.emit(mrn, rep)
                 return
 
@@ -1827,7 +1818,6 @@ class SingleReportWorker(QThread):
             self.report_done.emit(mrn, rep, False, str(e))
             log_append(mrn, rep.device_name, self.user_id, "upload_fail", str(e))
 
-        self._quit_driver()
         self.finished.emit(mrn, rep)
 
     def _upload_single(self, report):
@@ -1916,7 +1906,7 @@ class UploadWorker(QThread):
             driver.set_page_load_timeout(15)
             # 统一用 SZU06 取 user_id
             prefetch_user_id = _get_user_id(driver, self.user_id, "343", "8249||1")
-            driver.quit()
+            # 不调 driver.quit()——在UploadWorker线程调Selenium quit会硬崩溃
         except Exception as e:
             log_append(self.patient.mrn, "预取GetUserID", self.user_id, "user_fail", str(e))
 
