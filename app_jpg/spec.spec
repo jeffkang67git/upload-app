@@ -22,7 +22,7 @@ a = Analysis(
         'selenium.webdriver.chrome.webdriver',
         'webdriver_manager',
         'webbrowser',
-        'PyPDF2',
+        'pypdf',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
