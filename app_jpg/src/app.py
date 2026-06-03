@@ -1370,7 +1370,7 @@ class MainWindow(QMainWindow):
             self._pulse_timer.stop()
             self._pulse_timer = None
         if mrn in self._upload_workers:
-            del self._upload_workers[mrn]
+            self._upload_workers.pop(mrn)  # 移除引用但不触发立即GC
 
         for patient in self.patients:
             if patient.mrn == mrn:
@@ -1695,11 +1695,7 @@ class SingleReportWorker(QThread):
     finished = pyqtSignal(str, object)  # (mrn, rep)
 
     def _quit_driver(self):
-        if self.driver:
-            try:
-                self.driver.quit()
-            except Exception:
-                pass
+        # 不在worker线程调用 driver.quit()——Windows Selenium跨线程quit硬崩溃
         self.driver = None
 
     def __init__(self, patient, rep, user_id, user_orditem_id=None, parent=None):
