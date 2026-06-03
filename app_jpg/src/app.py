@@ -1372,8 +1372,11 @@ class MainWindow(QMainWindow):
             self._pulse_timer = None
 
         # 1. 先做合并和清理（不依赖UI状态）
+        QApplication.processEvents()  # flush pending signals
         self._merge_to_desktop(user_id)
+        QApplication.processEvents()
         self._cleanup_uploaded_pdfs(mrn)
+        QApplication.processEvents()
 
         # 2. 刷新患者状态
         for patient in self.patients:

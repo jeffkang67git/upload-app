@@ -18,7 +18,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pyinstaller pymupdf selenium webdriver-manager PyQt5==5.15.11
+          pip install pyinstaller pymupdf selenium webdriver-manager PyQt5==5.15.11 PyPDF2
 
       - name: Build with PyInstaller
         run: |
