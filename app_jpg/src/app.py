@@ -1864,12 +1864,12 @@ class SingleReportWorker(QThread):
             doc = fitz.open(pdf_path)
         except Exception as e:
             raise RuntimeError(f"PDF打开失败: {e}")
-        jpg_paths = rep.jpg_paths  # 签名时后台已转换
+        jpg_paths = report.jpg_paths  # 签名时后台已转换
         if not jpg_paths:
-            log_append(mrn, rep.device_name, self.user_id, "upload_fail", "无JPG文件")
-            rep.status = "fail"
-            rep.error_msg = "无JPG文件"
-            self.finished.emit(mrn, rep)
+            log_append(mrn, report.device_name, self.user_id, "upload_fail", "无JPG文件")
+            report.status = "fail"
+            report.error_msg = "无JPG文件"
+            self.finished.emit(mrn, report)
             return
 
         # FTP长连接：一次登录，上传所有页 + 重命名
