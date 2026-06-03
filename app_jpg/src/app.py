@@ -1257,40 +1257,47 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_ord_fetch_timer'):
             self._ord_fetch_timer.stop()
         self._ord_fetch_worker = None
+        self._current_user_id_for_upload = user_id_input
 
         current = self.patients[self.current_idx] if 0 <= self.current_idx < len(self.patients) else None
         if not current:
             return
 
         # 启动所有报告的 PDF→JPG 后台转换（并行）
-        converters = []
+        self._jpg_converters = []  # 保持引用防 GC
         for rep in current.reports:
             if rep.urcode and rep.status != "cancel":
                 rep.jpg_ready = False
                 rep.jpg_paths = None
                 conv = PdfConvertWorker(rep)
                 conv.converted.connect(self._on_jpg_convert_done)
+                conv.finished.connect(lambda: self._check_jpg_convert_finished(current))
                 conv.start()
-                converters.append(conv)
+                self._jpg_converters.append(conv)
 
-        # 等待所有 JPG 转换完成（屏障，用 processEvents 让 Qt 信号穿透）
-        from PyQt5.QtWidgets import QApplication
-        for _ in range(600):  # 最多等 60s
-            if all(
-                rep.status == "cancel" or not rep.urcode or rep.jpg_ready
-                for rep in current.reports
-            ):
-                break
-            QApplication.processEvents()
-            import time as _t
-            _t.sleep(0.1)
+        # 启动 QTimer 轮询，不阻塞
+        self._jpg_convert_check_timer = QTimer()
+        self._jpg_convert_check_timer.timeout.connect(
+            lambda: self._check_jpg_convert_finished(current))
+        self._jpg_convert_check_timer.start(100)
 
-        self._do_upload(user_id_input)
+    def _check_jpg_convert_finished(self, current):
+        """轮询 JPG 转换是否全部完成"""
+        pending = [rep for rep in current.reports
+                   if rep.urcode and rep.status != "cancel" and not rep.jpg_ready]
+        if pending:
+            return
+        # 全部完成，停止轮询，开始上传
+        if hasattr(self, '_jpg_convert_check_timer'):
+            self._jpg_convert_check_timer.stop()
+        self._do_upload(self._current_user_id_for_upload)
 
     def _on_jpg_convert_done(self, rep, jpg_paths):
         """JPG 转换完成后更新 rep（屏障信号）"""
         rep.jpg_paths = jpg_paths
         rep.jpg_ready = True
+        if not jpg_paths:
+            rep.jpg_ready = False  # 转换失败，不认为完成
 
     def _do_upload(self, user_id_input):
         """启动并行上传：每报告独立worker，签名后显示进度遮罩"""
