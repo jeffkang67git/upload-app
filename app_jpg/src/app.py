@@ -1382,6 +1382,7 @@ class MainWindow(QMainWindow):
 
         self.lbl_last_upload.setText(f"今日已上传: {datetime.now().strftime('%H:%M')}")
         self._merge_to_desktop(user_id)
+        self._cleanup_uploaded_pdfs(mrn)
         self.statusBar().showMessage(f"患者 {mrn} 上传完成")
 
     def _merge_to_desktop(self, user_id):
@@ -1407,9 +1408,24 @@ class MainWindow(QMainWindow):
                         writer.add_page(page)
                 except Exception:
                     pass
+            if len(writer.pages) == 0:
+                log_append(patient.mrn, "MERGE", user_id, "merge_skip", "无有效页面可合并")
+                continue
             with open(out_path, 'wb') as f:
                 writer.write(f)
             log_append(patient.mrn, "MERGE", user_id, "merged", str(out_path))
+
+    def _cleanup_uploaded_pdfs(self, mrn):
+        """合并完成后删除已上传的原PDF"""
+        for patient in self.patients:
+            if patient.mrn != mrn:
+                continue
+            for rep in patient.reports:
+                if rep.status == 'done':
+                    try:
+                        os.unlink(str(rep.pdf_path))
+                    except Exception:
+                        pass
 
     def closeEvent(self, event):
         self._destroyed = True
@@ -1831,11 +1847,6 @@ class SingleReportWorker(QThread):
             raise RuntimeError("无可上传页")
         # FTP长连接：一次登录，上传所有页
         self._ftps_upload_all(report, jpg_paths)
-        # 所有jpg上传成功后删除原PDF
-        try:
-            os.unlink(pdf_path)
-        except Exception:
-            pass
         return len(jpg_paths)
 
     def _ftps_upload_all(self, report, jpg_paths):
