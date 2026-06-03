@@ -1253,21 +1253,35 @@ class MainWindow(QMainWindow):
         self._render_cards()
 
     def _on_ord_fetch_done(self, mrn, user_id_input):
-        """ord_fetch 完成后，启动 PDF→JPG 后台转换，完成后开始上传流程"""
+        """ord_fetch 完成后，启动 PDF→JPG 后台转换，等待全部完成后开始上传"""
         if hasattr(self, '_ord_fetch_timer'):
             self._ord_fetch_timer.stop()
         self._ord_fetch_worker = None
 
-        # 启动所有报告的 PDF→JPG 后台转换（并行）
         current = self.patients[self.current_idx] if 0 <= self.current_idx < len(self.patients) else None
-        if current:
-            for rep in current.reports:
-                if rep.urcode and rep.status != "cancel":
-                    rep.jpg_ready = False
-                    rep.jpg_paths = None
-                    conv = PdfConvertWorker(rep)
-                    conv.converted.connect(self._on_jpg_convert_done)
-                    conv.start()
+        if not current:
+            return
+
+        # 启动所有报告的 PDF→JPG 后台转换（并行）
+        converters = []
+        for rep in current.reports:
+            if rep.urcode and rep.status != "cancel":
+                rep.jpg_ready = False
+                rep.jpg_paths = None
+                conv = PdfConvertWorker(rep)
+                conv.converted.connect(self._on_jpg_convert_done)
+                conv.start()
+                converters.append(conv)
+
+        # 等待所有 JPG 转换完成（屏障）
+        import time as _t
+        for _ in range(600):  # 最多等 60s
+            if all(
+                rep.status == "cancel" or not rep.urcode or rep.jpg_ready
+                for rep in current.reports
+            ):
+                break
+            _t.sleep(0.1)
 
         self._do_upload(user_id_input)
 
@@ -1719,20 +1733,7 @@ class SingleReportWorker(QThread):
         mrn = self.patient.mrn
         rep = self.rep
 
-        # 等待 JPG 转换完成（ord_fetch 已完成后，签名后台并行转换的 JPG）
-        for _ in range(300):  # 最多等 30s
-            if rep.jpg_ready:
-                break
-            import time as _t
-            _t.sleep(0.1)
-        else:
-            log_append(mrn, rep.device_name, self.user_id, "upload_fail", "JPG转换超时")
-            rep.status = "fail"
-            rep.error_msg = "JPG转换超时"
-            self.finished.emit(mrn, rep)
-            return
-
-        jpg_paths = rep.jpg_paths
+        jpg_paths = rep.jpg_paths  # 签名时后台已转换
         if not jpg_paths:
             log_append(mrn, rep.device_name, self.user_id, "upload_fail", "无JPG文件")
             rep.status = "fail"
