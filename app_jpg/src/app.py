@@ -1366,28 +1366,31 @@ class MainWindow(QMainWindow):
         self._update_patient_list_items()
 
     def _on_upload_finished(self, mrn, user_id):
-        """上传完成后：合并PDF → 删除原PDF → 刷新UI —— 用QTimer解耦避免信号链冲突"""
+        """上传完成后：分步执行 + 日志，定位崩溃点"""
         if hasattr(self, '_pulse_timer') and self._pulse_timer:
             self._pulse_timer.stop()
             self._pulse_timer = None
 
-        # 合并和清理
-        self._merge_to_desktop(user_id)
-        self._cleanup_uploaded_pdfs(mrn)
+        log_append(mrn, "DEBUG", user_id, "step1_merge_start", "")
+        try:
+            self._merge_to_desktop(user_id)
+            log_append(mrn, "DEBUG", user_id, "step1_merge_ok", "")
+        except Exception as e:
+            log_append(mrn, "DEBUG", user_id, "step1_merge_fail", str(e))
 
-        # 刷新患者状态
-        for patient in self.patients:
-            if patient.mrn == mrn:
-                patient.refresh_aggregate_status()
-                break
+        log_append(mrn, "DEBUG", user_id, "step2_cleanup_start", "")
+        try:
+            self._cleanup_uploaded_pdfs(mrn)
+            log_append(mrn, "DEBUG", user_id, "step2_cleanup_ok", "")
+        except Exception as e:
+            log_append(mrn, "DEBUG", user_id, "step2_cleanup_fail", str(e))
 
-        # UI刷新延迟到下一事件循环
-        QTimer.singleShot(0, lambda: self._update_patient_list_items())
-        QTimer.singleShot(0, lambda: self._render_cards())
-        QTimer.singleShot(0, lambda: self.lbl_last_upload.setText(
-            f"今日已上传: {datetime.now().strftime('%H:%M')}"))
-        QTimer.singleShot(0, lambda: self.statusBar().showMessage(
-            f"患者 {mrn} 上传完成"))
+        log_append(mrn, "DEBUG", user_id, "step3_ui", "")
+        self._update_patient_list_items()
+        self._render_cards()
+        self.lbl_last_upload.setText(f"今日已上传: {datetime.now().strftime('%H:%M')}")
+        self.statusBar().showMessage(f"患者 {mrn} 上传完成")
+        log_append(mrn, "DEBUG", user_id, "step4_done", "")
 
     def _merge_to_desktop(self, user_id):
         output_dir = self.config.get('desktop_output_dir', '')
@@ -1930,6 +1933,7 @@ class UploadWorker(QThread):
         self._completed += 1
         self.finished_worker.emit(mrn, rep)
         if self._completed >= len(self._workers):
+            log_append(mrn, "DEBUG", self.user_id, "signal_all_done", str(self._completed))
             self.finished.emit(mrn)
 
 
