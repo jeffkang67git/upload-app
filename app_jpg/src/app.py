@@ -1366,31 +1366,28 @@ class MainWindow(QMainWindow):
         self._update_patient_list_items()
 
     def _on_upload_finished(self, mrn, user_id):
-        """上传完成后：合并PDF → 删除原PDF → 刷新UI → 清理worker"""
+        """上传完成后：合并PDF → 删除原PDF → 刷新UI —— 用QTimer解耦避免信号链冲突"""
         if hasattr(self, '_pulse_timer') and self._pulse_timer:
             self._pulse_timer.stop()
             self._pulse_timer = None
 
-        # 1. 先做合并和清理（不依赖UI状态）
-        QApplication.processEvents()  # flush pending signals
+        # 合并和清理
         self._merge_to_desktop(user_id)
-        QApplication.processEvents()
         self._cleanup_uploaded_pdfs(mrn)
-        QApplication.processEvents()
 
-        # 2. 刷新患者状态
+        # 刷新患者状态
         for patient in self.patients:
             if patient.mrn == mrn:
                 patient.refresh_aggregate_status()
                 break
 
-        self._update_patient_list_items()
-        self._render_cards()
-
-        self.lbl_last_upload.setText(f"今日已上传: {datetime.now().strftime('%H:%M')}")
-        self.statusBar().showMessage(f"患者 {mrn} 上传完成")
-
-        # worker引用由closeEvent统一清理，不在此处触发GC
+        # UI刷新延迟到下一事件循环
+        QTimer.singleShot(0, lambda: self._update_patient_list_items())
+        QTimer.singleShot(0, lambda: self._render_cards())
+        QTimer.singleShot(0, lambda: self.lbl_last_upload.setText(
+            f"今日已上传: {datetime.now().strftime('%H:%M')}"))
+        QTimer.singleShot(0, lambda: self.statusBar().showMessage(
+            f"患者 {mrn} 上传完成"))
 
     def _merge_to_desktop(self, user_id):
         output_dir = self.config.get('desktop_output_dir', '')
@@ -1726,6 +1723,7 @@ class SingleReportWorker(QThread):
             rep.status = "fail"
             rep.ord_no = f"ERR:{e}"
             self.report_done.emit(mrn, rep, False, str(e))
+            self.driver = None   # 防GC时跨线程析构崩溃
             self.finished.emit(mrn, rep)
             return
 
@@ -1743,6 +1741,7 @@ class SingleReportWorker(QThread):
             rep.status = "fail"
             rep.ord_no = f"ERR:{e}"
             self.report_done.emit(mrn, rep, False, str(e))
+            self.driver = None   # 防GC时跨线程析构崩溃
             self.finished.emit(mrn, rep)
             return
 
@@ -1789,6 +1788,7 @@ class SingleReportWorker(QThread):
                 rep.status = "fail"
                 self.report_done.emit(mrn, rep, False, str(e))
                 log_append(mrn, rep.device_name, self.user_id, "ord_fail", str(e))
+                self.driver = None   # 防GC时跨线程析构崩溃
                 self.finished.emit(mrn, rep)
                 return
 
@@ -1821,6 +1821,7 @@ class SingleReportWorker(QThread):
             self.report_done.emit(mrn, rep, False, str(e))
             log_append(mrn, rep.device_name, self.user_id, "upload_fail", str(e))
 
+        self.driver = None   # 防GC时跨线程析构崩溃
         self.finished.emit(mrn, rep)
 
     def _upload_single(self, report):
@@ -1904,14 +1905,15 @@ class UploadWorker(QThread):
 
         # 预取 GetUserID（一次，全报告共用）
         prefetch_user_id = None
+        driver = None
         try:
             driver = _make_chrome_driver()
             driver.set_page_load_timeout(15)
-            # 统一用 SZU06 取 user_id
             prefetch_user_id = _get_user_id(driver, self.user_id, "343", "8249||1")
-            # 不调 driver.quit()——在UploadWorker线程调Selenium quit会硬崩溃
         except Exception as e:
             log_append(self.patient.mrn, "预取GetUserID", self.user_id, "user_fail", str(e))
+        finally:
+            driver = None  # 防GC时跨线程析构崩溃
 
         # 并行启动所有报告 worker
         for rep in reports:
