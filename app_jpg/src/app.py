@@ -1402,7 +1402,7 @@ class MainWindow(QMainWindow):
                 continue
             parts = []
             for r in valid:
-                n = r.display_name()
+                n = r.display_name
                 if n not in parts:
                     parts.append(n)
             merge_name = patient.mrn + "_" + "_".join(parts) + ".pdf"
