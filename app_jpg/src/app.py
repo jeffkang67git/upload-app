@@ -1273,14 +1273,16 @@ class MainWindow(QMainWindow):
                 conv.start()
                 converters.append(conv)
 
-        # 等待所有 JPG 转换完成（屏障）
-        import time as _t
+        # 等待所有 JPG 转换完成（屏障，用 processEvents 让 Qt 信号穿透）
+        from PyQt5.QtWidgets import QApplication
         for _ in range(600):  # 最多等 60s
             if all(
                 rep.status == "cancel" or not rep.urcode or rep.jpg_ready
                 for rep in current.reports
             ):
                 break
+            QApplication.processEvents()
+            import time as _t
             _t.sleep(0.1)
 
         self._do_upload(user_id_input)
