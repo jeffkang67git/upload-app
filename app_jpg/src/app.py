@@ -1366,12 +1366,16 @@ class MainWindow(QMainWindow):
         self._update_patient_list_items()
 
     def _on_upload_finished(self, mrn, user_id):
+        """上传完成后：合并PDF → 删除原PDF → 刷新UI → 清理worker"""
         if hasattr(self, '_pulse_timer') and self._pulse_timer:
             self._pulse_timer.stop()
             self._pulse_timer = None
-        if mrn in self._upload_workers:
-            self._upload_workers.pop(mrn)  # 移除引用但不触发立即GC
 
+        # 1. 先做合并和清理（不依赖UI状态）
+        self._merge_to_desktop(user_id)
+        self._cleanup_uploaded_pdfs(mrn)
+
+        # 2. 刷新患者状态
         for patient in self.patients:
             if patient.mrn == mrn:
                 patient.refresh_aggregate_status()
@@ -1381,9 +1385,11 @@ class MainWindow(QMainWindow):
         self._render_cards()
 
         self.lbl_last_upload.setText(f"今日已上传: {datetime.now().strftime('%H:%M')}")
-        self._merge_to_desktop(user_id)
-        self._cleanup_uploaded_pdfs(mrn)
         self.statusBar().showMessage(f"患者 {mrn} 上传完成")
+
+        # 3. worker引用延迟清理（避免在Qt信号处理中触发GC）
+        if mrn in self._upload_workers:
+            self._upload_workers.pop(mrn)
 
     def _merge_to_desktop(self, user_id):
         output_dir = self.config.get('desktop_output_dir', '')
