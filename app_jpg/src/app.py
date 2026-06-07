@@ -24,11 +24,11 @@ from PyQt5.QtWidgets import (
     QTableWidgetItem, QAbstractItemView
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QEvent
-from PyQt5.QtGui import QFont, QPalette, QBrush, QColor
+from PyQt5.QtGui import QFont, QPalette, QBrush, QColor, QPixmap, QImage
 
 from src.config_manager import ConfigManager
 
-CARDS_PER_PAGE = 6
+CARDS_VISIBLE = 5  # 卡片行最多显示数
 CSP_PAGE_TPL = "https://10.1.9.105:1443/imedical/web/csp/dhcpe.uploadchkresult.csp?URCode={urcode}&CurLocID=343"
 
 FTP_CONFIG = {
@@ -628,7 +628,10 @@ class MainWindow(QMainWindow):
         self._apply_device_map()
         self.patients = []
         self.current_idx = 0
-        self.current_page = 0
+        self._current_report_idx = 0   # 当前患者中选中的报告索引
+        self._preview_visible = True    # PDF 预览区展开/收起
+        self._card_scroll_offset = 0    # 卡片行滚动偏移
+        self._pixmap_cache = {}         # path -> QPixmap 缓存
         self._ord_fetch_worker = None
         self._upload_workers = {}  # mrn -> UploadWorker
         self._pending_uploads = {}  # mrn -> user_id
@@ -685,25 +688,14 @@ class MainWindow(QMainWindow):
 
         tl.addWidget(left)
 
-        # 右侧卡片区
+        # ============================================================
+        # 右侧：卡片行 + PDF 预览区
+        # ============================================================
         right = QWidget()
         right.setStyleSheet("background: transparent;")
         rl = QVBoxLayout(right)
         rl.setContentsMargins(0, 0, 0, 0)
-        rl.setSpacing(8)
-
-        # 卡片网格（2列）
-        cards_wrap = QWidget()
-        cards_wrap.setStyleSheet("background: white; border-radius: 12px; padding: 8px;")
-        cards_wrap.setMinimumHeight(400)
-        cw = QVBoxLayout(cards_wrap)
-        cw.setContentsMargins(10, 10, 10, 10)
-        cw.setSpacing(8)
-
-        self.cards_grid = QGridLayout()
-        self.cards_grid.setSpacing(8)
-        cw.addLayout(self.cards_grid)
-        cw.addStretch()  # push cards to top
+        rl.setSpacing(0)
 
         # 患者标题
         self.patient_hdr = QLabel("")
@@ -711,7 +703,102 @@ class MainWindow(QMainWindow):
         self.patient_hdr.setStyleSheet("font-size: 14px; font-weight: 600; color: #1D1D1F; "
                                        "background: transparent;")
         rl.addWidget(self.patient_hdr)
-        rl.addWidget(cards_wrap, 1)
+
+        # --- 卡片行 (横向滚动) ---
+        card_row_container = QWidget()
+        card_row_container.setStyleSheet("background: white; border-radius: 12px;")
+        crc_layout = QHBoxLayout(card_row_container)
+        crc_layout.setContentsMargins(6, 8, 6, 8)
+        crc_layout.setSpacing(4)
+
+        self.btn_card_left = QPushButton("◀")
+        self.btn_card_left.setFixedSize(28, 28)
+        self.btn_card_left.setStyleSheet(
+            "QPushButton { border: 1px solid #D1D1D6; border-radius: 14px; background: white; font-size: 12px; color: #555; }"
+            "QPushButton:hover { background: #F0F0F5; border-color: #0066CC; }")
+        self.btn_card_left.clicked.connect(self._on_card_scroll_left)
+        crc_layout.addWidget(self.btn_card_left)
+
+        self.card_scroll_area = QScrollArea()
+        self.card_scroll_area.setStyleSheet("background: transparent; border: none;")
+        self.card_scroll_area.setFixedHeight(72)
+        self.card_scroll_area.setWidgetResizable(True)
+        self.card_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.card_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.card_row_widget = QWidget()
+        self.card_row_widget.setStyleSheet("background: transparent;")
+        self.card_row_layout = QHBoxLayout(self.card_row_widget)
+        self.card_row_layout.setContentsMargins(0, 0, 0, 0)
+        self.card_row_layout.setSpacing(8)
+        self.card_row_layout.addStretch()
+        self.card_scroll_area.setWidget(self.card_row_widget)
+        crc_layout.addWidget(self.card_scroll_area, 1)
+
+        self.btn_card_right = QPushButton("▶")
+        self.btn_card_right.setFixedSize(28, 28)
+        self.btn_card_right.setStyleSheet(
+            "QPushButton { border: 1px solid #D1D1D6; border-radius: 14px; background: white; font-size: 12px; color: #555; }"
+            "QPushButton:hover { background: #F0F0F5; border-color: #0066CC; }")
+        self.btn_card_right.clicked.connect(self._on_card_scroll_right)
+        crc_layout.addWidget(self.btn_card_right)
+
+        rl.addWidget(card_row_container)
+
+        # --- PDF 预览区 (可展开/收起) ---
+        self.preview_area = QWidget()
+        self.preview_area.setStyleSheet("background: #F8F9FA; border-top: 1px solid #F0F0F0;")
+        preview_layout = QVBoxLayout(self.preview_area)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_layout.setSpacing(0)
+
+        # PDF header bar
+        self.pdf_header_bar = QWidget()
+        self.pdf_header_bar.setStyleSheet("background: #FAFAFA; border-bottom: 1px solid #EEE;")
+        self.pdf_header_bar.setFixedHeight(28)
+        phb_layout = QHBoxLayout(self.pdf_header_bar)
+        phb_layout.setContentsMargins(12, 0, 12, 0)
+        self.lbl_pdf_filename = QLabel("")
+        self.lbl_pdf_filename.setStyleSheet("font-size: 11px; color: #86868B;")
+        phb_layout.addWidget(self.lbl_pdf_filename)
+        phb_layout.addStretch()
+        preview_layout.addWidget(self.pdf_header_bar)
+
+        # Scrollable PDF image area
+        self.pdf_scroll_area = QScrollArea()
+        self.pdf_scroll_area.setStyleSheet("background: #F8F9FA; border: none;")
+        self.pdf_scroll_area.setWidgetResizable(True)
+        self.pdf_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        pdf_container = QWidget()
+        pdf_container.setStyleSheet("background: transparent;")
+        self.pdf_image_layout = QVBoxLayout(pdf_container)
+        self.pdf_image_layout.setContentsMargins(16, 12, 16, 12)
+        self.lbl_pdf_page = QLabel()
+        self.lbl_pdf_page.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+        self.lbl_pdf_page.setStyleSheet("background: transparent;")
+        self.pdf_image_layout.addWidget(self.lbl_pdf_page)
+        self.pdf_scroll_area.setWidget(pdf_container)
+        preview_layout.addWidget(self.pdf_scroll_area, 1)
+
+        # Left/Right nav buttons (悬浮在预览区上)
+        self.btn_prev_report = QPushButton("◀")
+        self.btn_prev_report.setFixedSize(40, 40)
+        self.btn_prev_report.setStyleSheet(
+            "QPushButton { border: 1px solid #D1D1D6; border-radius: 20px; background: white; font-size: 16px; color: #333; }"
+            "QPushButton:hover { background: #0066CC; color: white; border-color: #0066CC; }")
+        self.btn_prev_report.clicked.connect(self._on_prev_report)
+        self.btn_prev_report.setParent(self.preview_area)
+        self.btn_prev_report.raise_()
+
+        self.btn_next_report = QPushButton("▶")
+        self.btn_next_report.setFixedSize(40, 40)
+        self.btn_next_report.setStyleSheet(
+            "QPushButton { border: 1px solid #D1D1D6; border-radius: 20px; background: white; font-size: 16px; color: #333; }"
+            "QPushButton:hover { background: #0066CC; color: white; border-color: #0066CC; }")
+        self.btn_next_report.clicked.connect(self._on_next_report)
+        self.btn_next_report.setParent(self.preview_area)
+        self.btn_next_report.raise_()
+
+        rl.addWidget(self.preview_area, 1)
 
         tl.addWidget(right, 1)
         bl.addWidget(top, 1)
@@ -738,7 +825,7 @@ class MainWindow(QMainWindow):
         self.lbl_last_upload.setStyleSheet("font-size: 11px; color: #86868B;")
         btml.addWidget(self.lbl_last_upload)
 
-        # 翻页导航 - 居中
+        # 翻页导航 - 居中（患者级别）
         page_nav = QWidget()
         page_nav.setStyleSheet("background: transparent;")
         pnl = QHBoxLayout(page_nav)
@@ -749,7 +836,7 @@ class MainWindow(QMainWindow):
         self.btn_prev.setStyleSheet(
             "border: 1px solid #D1D1D6; border-radius: 4px; "
             "font-size: 16px; color: #333; padding: 2px 6px; background: white;")
-        self.btn_prev.clicked.connect(self._on_prev)
+        self.btn_prev.clicked.connect(self._on_prev_patient)
         pnl.addWidget(self.btn_prev)
         self.lbl_page = QLabel("")
         self.lbl_page.setStyleSheet("font-size: 12px; color: #86868B; min-width: 60px; text-align: center;")
@@ -760,7 +847,7 @@ class MainWindow(QMainWindow):
         self.btn_next.setStyleSheet(
             "border: 1px solid #D1D1D6; border-radius: 4px; "
             "font-size: 16px; color: #333; padding: 2px 6px; background: white;")
-        self.btn_next.clicked.connect(self._on_next)
+        self.btn_next.clicked.connect(self._on_next_patient)
         pnl.addWidget(self.btn_next)
         # 插入 stretch 把 page_nav 推到横向居中
         btml.insertStretch(1)
@@ -778,7 +865,7 @@ class MainWindow(QMainWindow):
         root.addWidget(btm)
 
         # ---- Version bar ----
-        ver = QLabel("V1.0 - Proudly developed by Jeffrey Kang, Shenzhen New Frontier United Family Hospital")
+        ver = QLabel("V2.0 - Proudly developed by Jeffrey Kang, Shenzhen New Frontier United Family Hospital")
         ver.setFixedHeight(24)
         ver.setStyleSheet("background: #FAFAFA; font-size: 10px; color: #C7C7CC; padding: 0;")
         ver.setAlignment(Qt.AlignCenter)
@@ -835,7 +922,10 @@ class MainWindow(QMainWindow):
             self._refresh_patient_list()
             if patients:
                 self.current_idx = 0
-                self.current_page = 0
+                self._current_report_idx = 0
+                self._card_scroll_offset = 0
+                self._preview_visible = True
+                self.preview_area.setVisible(True)
                 self._show_patient(0)
         except RuntimeError:
             pass
@@ -845,12 +935,18 @@ class MainWindow(QMainWindow):
         if key == Qt.Key_Up:
             if self.current_idx > 0:
                 self.current_idx -= 1
-                self.current_page = 0
+                self._current_report_idx = 0
+                self._card_scroll_offset = 0
+                self._preview_visible = True
+                self.preview_area.setVisible(True)
                 self._navigate_to_patient(self.current_idx)
         elif key == Qt.Key_Down:
             if self.current_idx + 1 < len(self.patients):
                 self.current_idx += 1
-                self.current_page = 0
+                self._current_report_idx = 0
+                self._card_scroll_offset = 0
+                self._preview_visible = True
+                self.preview_area.setVisible(True)
                 self._navigate_to_patient(self.current_idx)
         else:
             super().keyPressEvent(event)
@@ -861,13 +957,19 @@ class MainWindow(QMainWindow):
             if key == Qt.Key_Up:
                 if self.current_idx > 0:
                     self.current_idx -= 1
-                    self.current_page = 0
+                    self._current_report_idx = 0
+                    self._card_scroll_offset = 0
+                    self._preview_visible = True
+                    self.preview_area.setVisible(True)
                     self._navigate_to_patient(self.current_idx)
                 return True
             elif key == Qt.Key_Down:
                 if self.current_idx + 1 < len(self.patients):
                     self.current_idx += 1
-                    self.current_page = 0
+                    self._current_report_idx = 0
+                    self._card_scroll_offset = 0
+                    self._preview_visible = True
+                    self.preview_area.setVisible(True)
                     self._navigate_to_patient(self.current_idx)
                 return True
         return super().eventFilter(obj, event)
@@ -946,21 +1048,46 @@ class MainWindow(QMainWindow):
             idx = self.patient_list.row(item)
         if 0 <= idx < len(self.patients):
             self.current_idx = idx
-            self.current_page = 0
+            self._current_report_idx = 0
+            self._card_scroll_offset = 0
+            self._preview_visible = True
+            self.preview_area.setVisible(True)
             self._show_patient(idx)
+
+    # ============================================================
+    # 患者级别导航 (底部栏 ‹ ›)
+    # ============================================================
+    def _on_prev_patient(self):
+        if not self.patients:
+            return
+        if self.current_idx > 0:
+            self.current_idx -= 1
+            self._current_report_idx = 0
+            self._card_scroll_offset = 0
+            self._preview_visible = True
+            self.preview_area.setVisible(True)
+            self._navigate_to_patient(self.current_idx)
+
+    def _on_next_patient(self):
+        if not self.patients:
+            return
+        if self.current_idx + 1 < len(self.patients):
+            self.current_idx += 1
+            self._current_report_idx = 0
+            self._card_scroll_offset = 0
+            self._preview_visible = True
+            self.preview_area.setVisible(True)
+            self._navigate_to_patient(self.current_idx)
 
     def _show_patient(self, idx):
         if idx < 0 or idx >= len(self.patients) or self._destroyed:
             return
         try:
             patient = self.patients[idx]
-            total_pages = (len(patient.reports) + CARDS_PER_PAGE - 1) // CARDS_PER_PAGE
-            if self.current_page >= total_pages:
-                self.current_page = 0
-            self._render_cards()
+            self._render_card_row()
+            self._render_pdf_preview()
             self._update_page_nav()
             self.patient_hdr.setText(f"患者: {patient.mrn}  ({len(patient.reports)}份报告)")
-            # Highlight selected patient
             for i in range(self.patient_list.count()):
                 item = self.patient_list.item(i)
                 item.setBackground(QColor('transparent') if i != idx else QColor('#E8F4FF'))
@@ -972,17 +1099,9 @@ class MainWindow(QMainWindow):
         if self._destroyed:
             return
         try:
-            patient = self.patients[self.current_idx]
-            total_cards = len(patient.reports)
-            card_page = self.current_page
-            card_total = max(1, (total_cards + CARDS_PER_PAGE - 1) // CARDS_PER_PAGE)
             total_patients = len(self.patients)
-
-            # 跨患者翻页：prev 在第一张卡片页且有上一个患者时也能点
-            self.btn_prev.setEnabled(card_page > 0 or self.current_idx > 0)
-            # 跨患者翻页：next 在最后一张卡片页且有下一个患者时也能点
-            self.btn_next.setEnabled(card_page < card_total - 1 or self.current_idx + 1 < total_patients)
-
+            self.btn_prev.setEnabled(self.current_idx > 0)
+            self.btn_next.setEnabled(self.current_idx + 1 < total_patients)
             if total_patients > 0:
                 self.lbl_page.setText(f"{self.current_idx + 1}/{total_patients}")
             else:
@@ -990,183 +1109,262 @@ class MainWindow(QMainWindow):
         except RuntimeError:
             pass
 
-    def _on_prev(self):
-        if not self.patients:
-            return
-        total = len(self.patients[self.current_idx].reports)
-        total_pages = max(1, (total + CARDS_PER_PAGE - 1) // CARDS_PER_PAGE)
-        if self.current_page > 0:
-            self.current_page -= 1
-        else:
-            # 已在第一页，跳到上一个患者的最后一页
-            if self.current_idx > 0:
-                self.current_idx -= 1
-                prev_total = len(self.patients[self.current_idx].reports)
-                self.current_page = max(0, (prev_total - 1 + CARDS_PER_PAGE - 1) // CARDS_PER_PAGE)
-            else:
-                return
-        self._show_patient(self.current_idx)
+    # ============================================================
+    # 卡片行渲染 + 横向滚动
+    # ============================================================
+    def _max_card_scroll(self):
+        patient = self.patients[self.current_idx]
+        total = len(patient.reports)
+        return max(0, total - CARDS_VISIBLE)
 
-    def _on_next(self):
-        if not self.patients:
-            return
-        total = len(self.patients[self.current_idx].reports)
-        total_pages = max(1, (total + CARDS_PER_PAGE - 1) // CARDS_PER_PAGE)
-        if self.current_page < total_pages - 1:
-            self.current_page += 1
-        else:
-            # 已在最后一页，跳到下一个患者的第一页
-            if self.current_idx + 1 < len(self.patients):
-                self.current_idx += 1
-                self.current_page = 0
-            else:
-                return
-        self._show_patient(self.current_idx)
+    def _on_card_scroll_left(self):
+        if self._card_scroll_offset > 0:
+            self._card_scroll_offset -= 1
+            self._render_card_row()
 
-    def _render_cards(self):
+    def _on_card_scroll_right(self):
+        if self._card_scroll_offset < self._max_card_scroll():
+            self._card_scroll_offset += 1
+            self._render_card_row()
+
+    def _render_card_row(self):
+        """渲染卡片行（最多 CARDS_VISIBLE 张）"""
         if not self.patients or self.current_idx >= len(self.patients):
             return
         patient = self.patients[self.current_idx]
         reports = patient.reports
         mrn = patient.mrn
 
-        while self.cards_grid.count():
-            child = self.cards_grid.takeAt(0)
+        # 清除旧卡片
+        while self.card_row_layout.count():
+            child = self.card_row_layout.takeAt(0)
             if child and child.widget():
                 child.widget().deleteLater()
 
-        start = self.current_page * CARDS_PER_PAGE
-        page_reports = reports[start:start + CARDS_PER_PAGE]
-        padded = page_reports + [None] * (CARDS_PER_PAGE - len(page_reports))
+        start = self._card_scroll_offset
+        visible = reports[start:start + CARDS_VISIBLE]
 
-        for i, rep in enumerate(padded):
+        for i, rep in enumerate(visible):
+            actual_idx = start + i
+            is_active = (actual_idx == self._current_report_idx and self._preview_visible)
+
             card = QFrame()
-            card.setFixedHeight(108)
-            if rep is None:
-                card.setStyleSheet("background: transparent; border: none;")
-                el = QVBoxLayout(card)
-                el.setContentsMargins(0, 0, 0, 0)
+            card.setFixedSize(140, 64)
+            card.setCursor(Qt.PointingHandCursor)
+
+            # 状态配色
+            if rep.status == 'done':
+                border = "#28C840" if is_active else "#C7E8C7"
+                bg = "#F0FFF0" if is_active else "#FAFFFA"
+            elif rep.status == 'fail':
+                border = "#FF3B30" if is_active else "#FFD5D5"
+                bg = "#FFFAFA"
+            elif rep.status == 'uploading':
+                border = "#FF9500" if is_active else "#FFE0A0"
+                bg = "#FFF9F0" if is_active else "#FFF9F0"
             else:
-                if rep.status == 'previewed':
-                    card.setStyleSheet("background: #FAFCFF; border: 1px solid #CCE4FF; border-radius: 8px;")
-                elif rep.status == 'uploading':
-                    card.setStyleSheet("background: #FFF9F0; border: 1px solid #FFE0A0; border-radius: 8px;")
-                else:
-                    card.setStyleSheet("background: white; border: 1px solid #E8E8ED; border-radius: 8px;")
+                border = "#0066CC" if is_active else "#E8E8ED"
+                bg = "#F5F9FF" if is_active else "white"
 
-                # Plan B: 3-column fixed layout, no stretch
-                cl = QHBoxLayout(card)
-                cl.setContentsMargins(10, 8, 10, 8)
-                cl.setSpacing(8)
+            if is_active:
+                card.setStyleSheet(
+                    f"background: {bg}; border: 2px solid {border}; border-radius: 10px;")
+            else:
+                card.setStyleSheet(
+                    f"background: {bg}; border: 2px solid {border}; border-radius: 10px;")
 
-                # Left: thumbnail (fixed 34x48)
-                thumb = QLabel("📄")
-                thumb.setFixedSize(34, 48)
-                thumb.setStyleSheet(
-                    "background: #F5F5F7; border: 1px solid #E0E0E4; border-radius: 4px; font-size: 18px;")
-                thumb.setAlignment(Qt.AlignCenter)
-                cl.addWidget(thumb)
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(10, 8, 10, 8)
+            cl.setSpacing(3)
 
-                # Middle: device + order (no stretch, top-aligned, expand to fill)
-                mid = QVBoxLayout()
-                mid.setSpacing(4)
-                mid.setContentsMargins(0, 0, 0, 0)
-                mid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+            # 设备名
+            dv = QLabel(rep.display_device)
+            dv.setStyleSheet("font-size: 12px; font-weight: 600; color: #1D1D1F;")
+            dv.setWordWrap(False)
+            cl.addWidget(dv)
 
-                dv = QLabel(rep.display_device)
-                dv.setStyleSheet("font-size: 12px; font-weight: 600; color: #1D1D1F; padding: 0px;")
-                dv.setTextInteractionFlags(Qt.TextSelectableByMouse)
-                mid.addWidget(dv)
+            # 医嘱号
+            if rep.ord_status == 'fetching':
+                ord_text = "获取中..."
+                is_err = False
+            elif rep.ord_no and str(rep.ord_no).startswith("ERR"):
+                ord_text = rep.ord_no
+                is_err = True
+            elif rep.ord_no:
+                ord_text = rep.ord_no
+                is_err = False
+            else:
+                ord_text = "待获取"
+                is_err = False
+            ol = QLabel(ord_text)
+            ol.setStyleSheet(
+                "font-size: 11px; color: #FF3B30;" if is_err else
+                "font-size: 11px; color: #FF9500;" if rep.ord_status == 'fetching' else
+                "font-size: 11px; color: #86868B;")
+            cl.addWidget(ol)
 
-                if rep.ord_status == 'fetching':
-                    ol = QLabel("获取中...")
-                    ol.setStyleSheet("font-size: 11px; color: #FF9500; padding: 0px;")
-                elif rep.ord_no and str(rep.ord_no).startswith("ERR"):
-                    ol = QLabel(f"医嘱号: {rep.ord_no}")
-                    ol.setStyleSheet(
-                        "font-size: 11px; color: #FF3B30; background: #FFE8E8; "
-                        "padding: 1px 6px; border-radius: 6px;")
-                elif rep.ord_no:
-                    ol = QLabel(f"医嘱号: {rep.ord_no}")
-                    ol.setStyleSheet("font-size: 11px; color: #555555; padding: 0px;")
-                else:
-                    ol = QLabel("医嘱号: 待获取")
-                    ol.setStyleSheet("font-size: 11px; color: #86868B; padding: 0px;")
-                mid.addWidget(ol)
-
-                # 今日上传信息
-                key = (mrn, rep.device_name)
-                info = _daily_uploads.get(key)
-                if info:
-                    il = QLabel(f"今日 {info['time'][11:]} {info['user_id']} {info['ord_no']}")
-                    il.setStyleSheet("font-size: 10px; color: #34C759; padding: 0px;")
-                    mid.addWidget(il)
-
-                # Let mid stretch to fill remaining space (stays top-aligned)
-                mid.addStretch()
-                cl.addLayout(mid, 1)
-
-                # Right: button + status + bar (fixed width, top-aligned)
-                right = QVBoxLayout()
-                right.setSpacing(3)
-                right.setContentsMargins(0, 0, 0, 0)
-                right.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-
-                btn = QPushButton("已预览" if rep.status == 'previewed' else "预览")
-                if rep.status != 'previewed':
-                    btn.setStyleSheet(
-                        "padding: 3px 10px; border-radius: 5px; "
-                        "border: 1px solid #0066CC; color: #0066CC; background: white; "
-                        "font-size: 10px; font-weight: 500;")
-                else:
-                    btn.setStyleSheet(
-                        "padding: 3px 10px; border-radius: 5px; border: 1px solid #C7C7CC; "
-                        "color: #86868B; background: #F0F0F5; font-size: 10px;")
-                btn.rep = rep
-                btn.clicked.connect(lambda _, r=rep: self._on_preview(r))
-                right.addWidget(btn)
-
+            # 今日上传信息
+            key = (mrn, rep.device_name)
+            info = _daily_uploads.get(key)
+            if info:
+                il = QLabel(f"今日 {info['time'][11:]} 已上传")
+                il.setStyleSheet("font-size: 10px; color: #34C759;")
+                cl.addWidget(il)
+            else:
+                # 上传状态
                 if rep.status == 'done':
-                    st = QLabel("✓ 已上传")
-                    st.setStyleSheet("font-size: 10px; color: #28C840; font-weight: 600; padding: 0px;")
+                    st_text, st_color = "✓ 已上传", "#28C840"
                 elif rep.status == 'fail':
-                    st = QLabel("✗ 上传失败")
-                    st.setStyleSheet("font-size: 10px; color: #FF3B30; padding: 0px;")
+                    st_text, st_color = "✗ 上传失败", "#FF3B30"
                 elif rep.status == 'uploading':
-                    st = QLabel("上传中...")
-                    st.setStyleSheet("font-size: 10px; color: #FF9500; font-weight: 600; padding: 0px;")
-                elif rep.status == 'cancel':
-                    st = QLabel("已取消")
-                    st.setStyleSheet("font-size: 10px; color: #86868B; padding: 0px;")
+                    st_text, st_color = "上传中...", "#FF9500"
                 else:
-                    st = QLabel("待上传")
-                    st.setStyleSheet("font-size: 10px; color: #86868B; padding: 0px;")
-                right.addWidget(st)
+                    st_text, st_color = "待上传", "#86868B"
+                st = QLabel(st_text)
+                st.setStyleSheet(f"font-size: 11px; font-weight: 600; color: {st_color};")
+                cl.addWidget(st)
 
-                bar = QProgressBar()
-                bar.setFixedHeight(2)
-                bar.setRange(0, 100)
-                if rep.status == 'done':
-                    bar.setValue(100)
-                elif rep.status == 'uploading':
-                    bar.setValue(50)
-                else:
-                    bar.setValue(0)
-                bar.setStyleSheet(
-                    "QProgressBar { border: none; background: #F0F0F0; border-radius: 1px; } "
-                    "QProgressBar::chunk { background: #0066CC; border-radius: 1px; }")
-                right.addWidget(bar)
+            # 点击事件
+            card.mousePressEvent = lambda ev, r=rep, aidx=actual_idx: self._on_card_clicked(r, aidx)
+            self.card_row_layout.addWidget(card)
 
-                cl.addLayout(right)
+        self.card_row_layout.addStretch()
 
-            self.cards_grid.addWidget(card, i // 2, i % 2)
+        # 更新左右箭头状态
+        self.btn_card_left.setEnabled(self._card_scroll_offset > 0)
+        self.btn_card_right.setEnabled(self._card_scroll_offset < self._max_card_scroll())
 
-    def _on_preview(self, rep):
-        import webbrowser
-        webbrowser.open(str(rep.pdf_path))
-        if rep.status != 'done':
-            rep.status = 'previewed'
-        self._render_cards()
+    def _on_card_clicked(self, rep, idx):
+        """卡片点击：同卡片+预览可见 → 收起；否则 → 切换并展开"""
+        if idx == self._current_report_idx and self._preview_visible:
+            self._preview_visible = False
+            self.preview_area.setVisible(False)
+            self._render_card_row()
+        else:
+            self._current_report_idx = idx
+            self._preview_visible = True
+            self.preview_area.setVisible(True)
+            self._render_card_row()
+            self._render_pdf_preview()
+            self._ensure_card_visible(idx)
+
+    def _ensure_card_visible(self, idx):
+        """确保索引 idx 的卡片在可见范围内"""
+        if idx < self._card_scroll_offset:
+            self._card_scroll_offset = idx
+        elif idx >= self._card_scroll_offset + CARDS_VISIBLE:
+            self._card_scroll_offset = idx - CARDS_VISIBLE + 1
+        else:
+            return
+        self._render_card_row()
+
+    # ============================================================
+    # 报告级别导航 (预览区 ◀ ▶ 悬浮按钮)
+    # ============================================================
+    def _on_prev_report(self):
+        if self._current_report_idx > 0:
+            self._current_report_idx -= 1
+            self._ensure_card_visible(self._current_report_idx)
+            self._render_pdf_preview()
+            self._render_card_row()
+
+    def _on_next_report(self):
+        patient = self.patients[self.current_idx]
+        if self._current_report_idx < len(patient.reports) - 1:
+            self._current_report_idx += 1
+            self._ensure_card_visible(self._current_report_idx)
+            self._render_pdf_preview()
+            self._render_card_row()
+
+    # ============================================================
+    # PDF 首页渲染
+    # ============================================================
+    def _render_pdf_preview(self):
+        """渲染当前选中报告的 PDF 首页"""
+        patient = self.patients[self.current_idx]
+        reports = patient.reports
+
+        if not reports or self._current_report_idx >= len(reports):
+            self.lbl_pdf_filename.setText("")
+            self.lbl_pdf_page.clear()
+            self.btn_prev_report.setVisible(False)
+            self.btn_next_report.setVisible(False)
+            return
+
+        rep = reports[self._current_report_idx]
+        pdf_path = str(rep.pdf_path)
+
+        # 更新 header
+        self.lbl_pdf_filename.setText(f"{rep.pdf_path.name} — 第1页")
+
+        # 更新导航按钮可见性
+        self.btn_prev_report.setVisible(self._current_report_idx > 0)
+        self.btn_next_report.setVisible(self._current_report_idx < len(reports) - 1)
+
+        # 渲染 PDF 首页为 QPixmap
+        pixmap = self._get_pdf_pixmap(pdf_path)
+        if pixmap:
+            self.lbl_pdf_page.setPixmap(pixmap)
+            self.lbl_pdf_page.setText("")
+        else:
+            self.lbl_pdf_page.setText("无法渲染 PDF 预览")
+            self.lbl_pdf_page.setStyleSheet("font-size: 14px; color: #C7C7CC; padding: 40px;")
+
+        # 定位悬浮导航按钮
+        self._position_nav_buttons()
+        # 滚动到顶部
+        self.pdf_scroll_area.verticalScrollBar().setValue(0)
+
+    def _get_pdf_pixmap(self, pdf_path):
+        """获取 PDF 首页的 QPixmap，带缓存"""
+        cache_key = pdf_path
+        if cache_key in self._pixmap_cache:
+            return self._pixmap_cache[cache_key]
+
+        if fitz is None:
+            return None
+
+        try:
+            doc = fitz.open(pdf_path)
+            if len(doc) == 0:
+                doc.close()
+                return None
+            page = doc[0]
+
+            # 按预览区宽度渲染
+            target_width = self.pdf_scroll_area.viewport().width() - 32
+            if target_width < 100:
+                target_width = 600
+
+            zoom = target_width / page.rect.width
+            mat = fitz.Matrix(zoom, zoom)
+            pix = page.get_pixmap(matrix=mat)
+
+            img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888)
+            pixmap = QPixmap.fromImage(img)
+            self._pixmap_cache[cache_key] = pixmap
+            doc.close()
+            return pixmap
+        except Exception:
+            return None
+
+    def _position_nav_buttons(self):
+        """将 ◀ ▶ 导航按钮定位到预览区垂直居中位置"""
+        area_h = self.preview_area.height()
+        if area_h > 0:
+            btn_y = (area_h - 40) // 2
+            self.btn_prev_report.move(12, btn_y)
+            self.btn_next_report.move(self.preview_area.width() - 52, btn_y)
+
+    def resizeEvent(self, event):
+        """窗口大小变化时重新定位导航按钮 + 刷新 PDF"""
+        super().resizeEvent(event)
+        if hasattr(self, 'btn_prev_report'):
+            self._position_nav_buttons()
+        if hasattr(self, '_pixmap_cache'):
+            self._pixmap_cache.clear()
+        if hasattr(self, '_preview_visible') and self._preview_visible and hasattr(self, 'patients') and self.patients:
+            QTimer.singleShot(100, self._render_pdf_preview)
 
     # ---- settings ----
 
@@ -1230,7 +1428,7 @@ class MainWindow(QMainWindow):
         for rep in current.reports:
             rep.status = "uploading"
             rep.progress = 0
-        self._render_cards()
+        self._render_card_row()
         QApplication.processEvents()
 
         # 每报告独立 worker，互相并行
@@ -1250,7 +1448,7 @@ class MainWindow(QMainWindow):
 
     def _on_ord_fetch_progress(self, mrn, device, ord_no, status_msg):
         """ord_fetch 实时更新卡片上的医嘱号显示"""
-        self._render_cards()
+        self._render_card_row()
 
     def _on_ord_fetch_done(self, mrn, user_id_input):
         """ord_fetch 完成后，开始上传流程"""
@@ -1273,7 +1471,7 @@ class MainWindow(QMainWindow):
         for rep in current.reports:
             rep.status = "uploading"
             rep.progress = 0
-        self._render_cards()
+        self._render_card_row()
         QApplication.processEvents()
 
         # 每报告独立 worker，互相并行
@@ -1292,27 +1490,19 @@ class MainWindow(QMainWindow):
         self._pulse_timer.start(400)
 
     def _animate_progress_pulse(self):
-        """进度条样式脉冲：正在上传的报告进度条在蓝/橙之间切换，提示动态进行中"""
-        if not hasattr(self, 'cards_wrap'):
+        """上传中卡片文字脉冲效果"""
+        if not hasattr(self, 'card_row_widget'):
             return
         if not hasattr(self, '_pulse_state'):
             self._pulse_state = False
         self._pulse_state = not self._pulse_state
-        # 直接修改当前卡片页已有控件的样式，不重建
-        cards = self.cards_wrap.findChildren(QWidget)
-        # 进度条 chunk 颜色：蓝(活跃) / 橙(脉冲)
-        color = "#FF9500" if self._pulse_state else "#0066CC"
+        cards = self.card_row_widget.findChildren(QWidget)
         for card in cards:
-            for child in card.findChildren(QProgressBar):
-                child.setStyleSheet(
-                    f"QProgressBar {{ border: none; background: #F0F0F0; border-radius: 1px; }} "
-                    f"QProgressBar::chunk {{ background: {color}; border-radius: 1px; }}")
             for child in card.findChildren(QLabel):
                 if child.text() == "上传中...":
-                    # 文字脉冲：正常 / 加粗
                     child.setStyleSheet(
-                        "font-size: 10px; color: #FF9500; "
-                        + ("font-weight: 700; padding: 0px;" if self._pulse_state else "font-weight: 600; padding: 0px;"))
+                        "font-size: 11px; color: #FF9500; "
+                        + ("font-weight: 700;" if self._pulse_state else "font-weight: 600;"))
 
     def _show_upload_overlay(self):
         """签名后立即显示半透明进度遮罩"""
@@ -1358,11 +1548,11 @@ class MainWindow(QMainWindow):
             for rep in patient.reports:
                 if rep.ord_no == ord_no:
                     rep.progress = pct
-                    self._render_cards()
+                    self._render_card_row()
                     return
 
     def _on_upload_report_done(self, mrn, rep, success, err):
-        self._render_cards()
+        self._render_card_row()
         self._update_patient_list_items()
 
     def _on_upload_finished(self, mrn, user_id):
@@ -1387,7 +1577,7 @@ class MainWindow(QMainWindow):
 
         log_append(mrn, "DEBUG", user_id, "step3_ui", "")
         self._update_patient_list_items()
-        self._render_cards()
+        self._render_card_row()
         self.lbl_last_upload.setText(f"今日已上传: {datetime.now().strftime('%H:%M')}")
         self.statusBar().showMessage(f"患者 {mrn} 上传完成")
         log_append(mrn, "DEBUG", user_id, "step4_done", "")
